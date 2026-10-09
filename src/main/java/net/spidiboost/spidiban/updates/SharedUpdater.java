@@ -84,7 +84,9 @@ public final class SharedUpdater {
                     if(auto)CompletableFuture.delayedExecutor(4,TimeUnit.SECONDS).execute(()->client.execute(client::scheduleStop));
                 });
                 changes.clear();helper=null;
-            }catch(Exception e){LOG.debug("Update check failed ({})",e.getClass().getSimpleName());}
+            }catch(Exception e){LOG.debug("Update check failed ({})",e.getClass().getSimpleName());
+                MinecraftClient.getInstance().execute(()->{if(MinecraftClient.getInstance().currentScreen instanceof UpdateScreen)MinecraftClient.getInstance().setScreen(new UpdateScreen(this::snapshot,"Обновление отложено. Игра продолжит работать.","Повторим проверку при следующем входе на сервер",false,null));});
+            }
             finally{if(helper!=null)helper.destroyForcibly();for(var c:changes)try{Files.deleteIfExists(c.staged());}catch(IOException ignored){}checking.set(false);}
         });
     }
@@ -92,7 +94,15 @@ public final class SharedUpdater {
         Path staged=null;
         try {
             var release=Release.parse(m.mod(),new String(http.get(m.mod().latest(),16384),StandardCharsets.UTF_8));
-            if(!release.newerThan(m.version())){state(m,m.version(),"Установлена актуальная версия");return null;}
+            if(!release.newerThan(m.version())) {
+                // Older updaters replaced a JAR in place, keeping its previous version in the filename.
+                if(m.version().matches("[0-9]+\\.[0-9]+\\.[0-9]+")&&!m.jar().getFileName().toString().equals(m.mod().artifact(m.version()))) {
+                    String same=BatchInstall.hash(m.jar());var local=new Release(m.mod(),m.version(),m.mod().artifact(m.version()),same);
+                    staged=Files.createTempFile(dir,"rename-",".jar");Files.copy(m.jar(),staged,StandardCopyOption.REPLACE_EXISTING);Artifact.validate(staged,local);
+                    var rename=new BatchPlan.Change(m.jar(),game.resolve("mods").resolve(local.artifact()),staged,same,same);state(m,m.version(),"Имя JAR приведено к установленной версии");staged=null;return rename;
+                }
+                state(m,m.version(),"Установлена актуальная версия");return null;
+            }
             state(m,m.version()+" → "+release.version(),"Загружаем обновление…");String old=BatchInstall.hash(m.jar());
             staged=Files.createTempFile(dir,"release-",".jar");Files.write(staged,http.get(release.download(),32*1024*1024));Artifact.validate(staged,release);
             Path destination=game.resolve("mods").resolve(release.artifact());

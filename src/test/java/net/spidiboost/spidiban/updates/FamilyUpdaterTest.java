@@ -26,6 +26,14 @@ class FamilyUpdaterTest {
         for(var mod:ModCatalog.ALL){var r=Release.parse(mod,"version=2.3.4\nminecraft=1.21.4\nartifact="+mod.artifact("2.3.4")+"\nsha256="+"a".repeat(64));assertTrue(r.newerThan("2.3.3"));assertFalse(r.newerThan("2.3.4"));assertFalse(r.newerThan("9.0.0"));assertTrue(r.download().toString().startsWith(mod.base()));
             assertThrows(IOException.class,()->Release.parse(mod,"version=2.3.4\nminecraft=1.21.11\nartifact="+mod.artifact("2.3.4")+"\nsha256="+"a".repeat(64)));}
     }
+    @Test void downloadedArtifactChecksEveryModIdentityVersionAuthorAndBundledAgent()throws Exception {
+        for(var mod:ModCatalog.ALL){Path file=root.resolve(mod.name()+".jar");writeArtifact(file,mod,mod.id(),"SpidiBoost");var r=new Release(mod,"1.2.3",mod.artifact("1.2.3"),BatchInstall.hash(file));Artifact.validate(file,r);
+            writeArtifact(file,mod,"wrong_mod","SpidiBoost");var wrong=new Release(mod,"1.2.3",mod.artifact("1.2.3"),BatchInstall.hash(file));assertThrows(IOException.class,()->Artifact.validate(file,wrong));
+            writeArtifact(file,mod,mod.id(),"Other");var author=new Release(mod,"1.2.3",mod.artifact("1.2.3"),BatchInstall.hash(file));assertThrows(IOException.class,()->Artifact.validate(file,author));}
+    }
+    private static void writeArtifact(Path file,ModCatalog mod,String id,String author)throws Exception {
+        try(var zip=new ZipOutputStream(Files.newOutputStream(file))){zip.putNextEntry(new ZipEntry("fabric.mod.json"));String json="{\"id\":\""+id+"\",\"version\":\"1.2.3\",\"name\":\"spidiboost."+mod.name()+"\",\"authors\":[\""+author+"\"],\"environment\":\"client\",\"depends\":{\"minecraft\":\"1.21.4\"}}";zip.write(json.getBytes(java.nio.charset.StandardCharsets.UTF_8));zip.closeEntry();zip.putNextEntry(new ZipEntry(mod.id()+"-shared-update-agent.jar"));zip.write(new byte[]{1});zip.closeEntry();}
+    }
     private BatchPlan plan(int count)throws Exception {
         Path game=root.resolve("инстанс Minecraft"),mods=game.resolve("mods"),dir=game.resolve(".spidiboost-updates");Files.createDirectories(mods);Files.createDirectories(dir);
         Files.writeString(game.resolve("config.txt"),"keep");Files.writeString(mods.resolve("AdminTools.jar"),"protected");var changes=new ArrayList<BatchPlan.Change>();
