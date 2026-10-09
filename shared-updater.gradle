@@ -1,0 +1,14 @@
+sourceSets { sharedAgent {} }
+sourceSets.main.compileClasspath += sourceSets.sharedAgent.output
+sourceSets.main.runtimeClasspath += sourceSets.sharedAgent.output
+sourceSets.test.compileClasspath += sourceSets.sharedAgent.output
+sourceSets.test.runtimeClasspath += sourceSets.sharedAgent.output
+def sharedAgentJar = tasks.register('sharedAgentJar', Jar) {
+    from sourceSets.sharedAgent.output
+    archiveFileName = 'spidiban-shared-update-agent.jar'
+    destinationDirectory = layout.buildDirectory.dir('shared-agent')
+    manifest { attributes 'Main-Class': 'net.spidiboost.spidiban.updates.BatchAgent', 'Implementation-Vendor': 'SpidiBoost' }
+}
+test { dependsOn sharedAgentJar }
+processResources { from(sharedAgentJar) }
+jar { from(sourceSets.sharedAgent.output) }

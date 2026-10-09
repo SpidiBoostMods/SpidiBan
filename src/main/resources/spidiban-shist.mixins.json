@@ -1,0 +1,10 @@
+{
+  "required": true,
+  "package": "net.spidiboost.shist.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "ClientPlayNetworkHandlerMixin",
+    "ChatScreenMixin"
+  ],
+  "injectors": { "defaultRequire": 1 }
+}

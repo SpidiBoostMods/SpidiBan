@@ -1,0 +1,53 @@
+name: Publish SpidiBan
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Cross-platform tests
+        shell: bash
+        run: bash ./gradlew check --no-daemon
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-tests-${{ matrix.os }}
+          path: build/reports/tests/test
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Check release version
+        shell: bash
+        run: test "$GITHUB_REF_NAME" = "v$(sed -n 's/^mod_version=//p' gradle.properties)"
+      - name: Build and package
+        run: bash ./gradlew build --no-daemon && python scripts/package_family_release.py
+      - name: Publish verified assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "spidiboost.SpidiBan $version" --generate-notes \
+            "build/libs/SpidiBan-1.21.4-$version.jar" \
+            "build/libs/SpidiBan-1.21.4-$version-source-project.zip" \
+            build/libs/spidiban-update.properties

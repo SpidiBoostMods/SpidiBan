@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "id": "spidiban",
+  "version": "${version}",
+  "name": "spidiboost.SpidiBan",
+  "description": "Автоматизация /rwban и полный сбор истории /sb shist.",
+  "authors": [
+    "SpidiBoost"
+  ],
+  "license": "All Rights Reserved",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "net.spidiboost.spidiban.SpidiBanClient",
+      "net.spidiboost.shist.ShistClient",
+      "net.spidiboost.spidiban.updates.SharedBootstrap"
+    ]
+  },
+  "mixins": [
+    "spidiban.mixins.json",
+    "spidiban-shist.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.16.10",
+    "minecraft": "1.21.4",
+    "java": ">=21",
+    "fabric-api": "*"
+  },
+  "breaks": {
+    "spidiban_shist": "*"
+  },
+  "icon": "assets/spidiban/icon.png",
+  "contact": {
+    "homepage": "https://github.com/SpidiBoostMods/SpidiBan",
+    "sources": "https://github.com/SpidiBoostMods/SpidiBan",
+    "issues": "https://github.com/SpidiBoostMods/SpidiBan/issues"
+  }
+}
