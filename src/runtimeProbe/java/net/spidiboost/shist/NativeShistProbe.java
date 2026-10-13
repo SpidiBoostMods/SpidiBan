@@ -30,7 +30,7 @@ public final class NativeShistProbe implements ClientModInitializer {
         void reply(int i,String mode,Text reason){engine.accept(StyledMessages.formatted(Text.empty().append(Text.literal("Цель [QA"+i+"] "+(mode.equals("ban")?"забанена":"заткнута")+":\nПричина: ").formatted(Formatting.GOLD)).append(reason).append(Text.literal("\nОкончание "+(mode.equals("ban")?"бана":"мута")+": навсегда\nIP бан: no, навсегда: yes").formatted(Formatting.GOLD))));}
     }
     @Override public void onInitializeClient(){ClientTickEvents.END_CLIENT_TICK.register(client->{
-        if(finished||++ticks<40||client.currentScreen==null)return;finished=true;
+        if(finished||++ticks<40||!(client.currentScreen instanceof net.minecraft.client.gui.screen.TitleScreen)||client.getOverlay()!=null)return;finished=true;
         Path report=client.runDirectory.toPath().resolve("native-shist-results.txt");var evidence=new ArrayList<String>();Object original=null;
         try{
             var field=ShistSession.class.getDeclaredField("engine");field.setAccessible(true);original=field.get(null);
@@ -48,6 +48,17 @@ public final class NativeShistProbe implements ClientModInitializer {
                 if(phase.equals("checks"))require(test.partial.accepted().equals(List.of("QA0"))&&test.partial.unresolved().equals(List.of("QA1")),"stop lost partial decisions");
             }
             evidence.add("PASS all three aliases: Brigadier + uppercase/slash fallback stop history/checks, preserve partial results, zero sends after stop");
+            var automation=net.spidiboost.spidiban.SpidiBanAutomation.class;
+            var state=automation.getDeclaredField("state");state.setAccessible(true);
+            var queue=automation.getDeclaredField("PENDING");queue.setAccessible(true);
+            for(String alias:List.of("sb","spidiban","spidiboost")){
+                var test=new Fixture();test.start("ban",1);field.set(null,test.engine);
+                @SuppressWarnings({"rawtypes","unchecked"}) Object waiting=Enum.valueOf((Class)state.getType(),"WAITING_TO_SEND");state.set(null,waiting);
+                @SuppressWarnings("unchecked") var pending=(Deque<String>)queue.get(null);pending.add("QAQueued");
+                dispatcher.execute(alias+" stop",null);
+                require(!test.engine.active()&&!net.spidiboost.spidiban.SpidiBanAutomation.isActive()&&pending.isEmpty(),"stop did not clear both queues");
+            }
+            evidence.add("PASS all aliases stop active ban-menu automation and shist together, clear queued commands, unlock controls");
             for(String mode:List.of("ban","mute")){
                 var hud=client.inGameHud.getChatHud();hud.addToMessageHistory("/qa-saved-command");hud.addMessage(Text.literal("QA old chat"));
                 var test=new Fixture();test.start(mode,20);require(test.clears==1,"20 history cleanup");ShistSession.clearPendingChat();
