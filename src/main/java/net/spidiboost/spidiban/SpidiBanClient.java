@@ -112,7 +112,7 @@ public final class SpidiBanClient implements ClientModInitializer {
     }
 
     private static int cancel() {
-        SpidiBanAutomation.cancel();
+        if(SpidiBanAutomation.isActive()||!net.spidiboost.shist.ShistSession.active())SpidiBanAutomation.cancel();
         net.spidiboost.shist.ShistSession.stop();
         return Command.SINGLE_SUCCESS;
     }

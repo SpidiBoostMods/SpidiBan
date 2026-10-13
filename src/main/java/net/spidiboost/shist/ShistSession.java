@@ -88,8 +88,9 @@ public final class ShistSession {
             default -> throw new IllegalArgumentException(action);
         }
     }
+    public static boolean active() { return engine!=null&&engine.active(); }
     public static void stop() {
-        if(engine!=null&&engine.active())control("cancel",0);
+        if(active())control("cancel",0);
     }
     static void requestChatClear() { clearRequested=true; }
     static void clearPendingChat() {
