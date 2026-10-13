@@ -14,6 +14,7 @@ public final class ShistEngine {
         void feedback(String message);
         void complete(Result result);
         default void interrupted(Result result) { }
+        default void clearChat() { }
     }
     public record Result(List<String> candidates, List<String> accepted, List<String> unresolved, List<String> unclearHistory,
                          Map<String, String> decisions, int entries, int expected, boolean historyIncomplete) { }
@@ -35,6 +36,8 @@ public final class ShistEngine {
     private static final Pattern TIME = Pattern.compile("^\\[\\d{1,2}:\\d{2}:\\d{2}]\\s*");
     private static final Pattern FORMAT = Pattern.compile("§[0-9a-fk-orx]", FLAGS);
     private static final Pattern EXCLUDED = Pattern.compile("попытк[а-яё]*взлом|чсп|пиар[а-яё]*чит|некорректн[а-яё]*(?:никнейм|ник)|(?:нек+|nek+)(?:ник(?:нейм)?|nick(?:name)?|nik)");
+    private static final Pattern FP = Pattern.compile("(?<![\\p{L}\\p{N}_])fp(?:_rw)?(?![\\p{L}\\p{N}_])", FLAGS);
+    private int historySinceClear, checksSinceClear;
 
     private final Sink sink;
     private final LongSupplier clock;
@@ -80,6 +83,7 @@ public final class ShistEngine {
         entries = 0; date = ""; headerSeen = false; historyIncomplete = false;
         records.clear(); unclearHistory.clear(); checks.clear(); queue.clear(); pending.clear(); response = null; entry = null;
         latency = 250; sendCount = 0; pauseUntil = 0;
+        historySinceClear = checksSinceClear = 0;
         startAt = lastHistoryAt = lastProgressAt = clock.getAsLong();
         phase = Phase.HISTORY;
         String command = "shist " + owner + " " + mode + (count == null ? "" : " " + count);
@@ -96,7 +100,7 @@ public final class ShistEngine {
             String line = clean(part);
             if (line.isEmpty()) continue;
             if (phase == Phase.HISTORY) acceptHistory(line);
-            else if (phase == Phase.CHECKS) acceptCheck(line);
+            else if (phase == Phase.CHECKS) acceptCheck(line,part);
         }
     }
     private void acceptHistory(String line) {
@@ -123,7 +127,7 @@ public final class ShistEngine {
         }
         if (REVERSAL.matcher(line).matches()) {
             finishEntry();
-            if (records.add(date + "\n" + line.toLowerCase(Locale.ROOT))) entries++;
+            if (records.add(date + "\n" + line.toLowerCase(Locale.ROOT))) { entries++; historyCompleted(); }
             recordHistory(line); return;
         }
         Matcher match = ENTRY.matcher(line);
@@ -163,6 +167,7 @@ public final class ShistEngine {
             }
             sink.log("HISTORY ENTRY nick=" + entry.name + " active=" + entry.active
                     + " statusSeen=" + entry.statusSeen + " entries=" + entries + " candidates=" + checks.size());
+            historyCompleted();
         } else sink.log("HISTORY DUPLICATE nick=" + entry.name);
         entry = null;
     }
@@ -177,7 +182,13 @@ public final class ShistEngine {
         sink.feedback("История: " + entries + " записей, " + checks.size() + " активных ников. Проверяю…");
         if (checks.isEmpty()) complete();
     }
-    private void acceptCheck(String line) {
+    private void historyCompleted() {
+        if(++historySinceClear==20){historySinceClear=0;sink.log("CHAT CLEAR history entries="+entries);sink.clearChat();}
+    }
+    private void checkCompleted() {
+        if(++checksSinceClear==20){checksSinceClear=0;sink.log("CHAT CLEAR check responses=20");sink.clearChat();}
+    }
+    private void acceptCheck(String line,String styled) {
         String lower = line.toLowerCase(Locale.ROOT);
         Matcher header = TARGET.matcher(line);
         Matcher namedNegative = NAMED_NEGATIVE.matcher(line);
@@ -217,7 +228,8 @@ public final class ShistEngine {
         boolean reasonLine = reason.matches(), endingLine = ending.matches();
         boolean flagsLine = !reasonLine && !endingLine && (lower.startsWith("ip ") || lower.startsWith("навсегда:")
                 || lower.startsWith("permanent:") || lower.startsWith("тихий:")) && permanent.find();
-        if (reasonLine) { response.reason = reason.group(1); response.reasonSeen = true; readingReason = true; }
+        if (reasonLine) { response.reason = reason.group(1); response.reasonSeen = true;
+            response.aquaReason |= ReasonColors.hasAqua(styled,false); readingReason = true; }
         else if (endingLine) {
             String value = ending.group(1).toLowerCase(Locale.ROOT);
             response.endingSeen = !value.isBlank();
@@ -240,6 +252,7 @@ public final class ShistEngine {
                 && !lower.startsWith("администратор ") && !lower.startsWith("куратор ") && !lower.startsWith("модератор ")
                 && !lower.startsWith("ac ") && !lower.startsWith("rwac ") && !lower.startsWith("история ")) {
             response.reason += " " + line;
+            response.aquaReason |= ReasonColors.hasAqua(styled,true);
         } else return;
         response.lines.add(line); response.lastLineAt = clock.getAsLong();
         sink.log("CHECK FIELD nick=" + response.name + " reason=" + response.reasonSeen + " ending="
@@ -251,8 +264,8 @@ public final class ShistEngine {
                 && (mode.equals("mute") || (check.reasonSeen && !check.reason.isBlank()));
     }
     private void finishResponse(Check check) {
-        boolean excluded = mode.equals("ban") && excludedReason(check.reason);
-        resolve(check, check.forever && !excluded, excluded ? "excluded reason: " + check.reason
+        boolean excluded = mode.equals("ban") && (check.aquaReason || excludedReason(check.reason));
+        resolve(check, check.forever && !excluded, excluded ? (check.aquaReason?"excluded aqua reason: ":"excluded reason: ") + check.reason
                 : check.forever ? "permanent" : "temporary");
     }
     private void resolve(Check check, boolean accepted, String decision) {
@@ -264,6 +277,7 @@ public final class ShistEngine {
         sink.log("CHECK END nick=" + check.name + " decision=" + decision + " attempts=" + check.attempts
                 + " pending=" + pending.size() + " elapsedMs=" + (long)sample);
         if (response == check) { response = null; readingReason = false; }
+        checkCompleted();
     }
     public void tick() {
         assertThread();
@@ -282,6 +296,7 @@ public final class ShistEngine {
                 if (response == check) { response = null; readingReason = false; }
                 check.status = Status.UNRESOLVED; check.decision = "missing/incomplete/conflicting response";
                 sink.log("CHECK TIMEOUT nick=" + check.name + " attempt=" + check.attempts + " lines=" + check.lines);
+                checkCompleted();
             }
         }
         if (queue.isEmpty() && pending.isEmpty()) {
@@ -372,7 +387,7 @@ public final class ShistEngine {
     public static boolean excludedReason(String reason) {
         String lower = clean(reason).toLowerCase(Locale.ROOT);
         String compact = lower.replaceAll("(?U)[\\s\\p{P}\\p{S}]+", "");
-        return EXCLUDED.matcher(compact).find();
+        return FP.matcher(lower).find() || EXCLUDED.matcher(compact).find();
     }
     private static boolean isNegative(String lower) {
         return lower.contains("не забанен") || lower.contains("не заткнут") || lower.contains("не замучен")
@@ -394,9 +409,9 @@ public final class ShistEngine {
     }
     private static final class Check {
         final String name; Status status = Status.QUEUED;
-        int attempts; long sentAt, lastLineAt; boolean reasonSeen, endingSeen, flagsSeen, forever, conflict;
+        int attempts; long sentAt, lastLineAt; boolean reasonSeen, endingSeen, flagsSeen, forever, conflict, aquaReason;
         String reason="", decision="not checked"; final List<String> lines = new ArrayList<>();
         Check(String name) { this.name = name; }
-        void reset() { reasonSeen=endingSeen=flagsSeen=forever=conflict=false; reason=""; lines.clear(); }
+        void reset() { reasonSeen=endingSeen=flagsSeen=forever=conflict=aquaReason=false; reason=""; lines.clear(); }
     }
 }

@@ -25,6 +25,7 @@ public final class ShistSession {
     private static volatile IOException logError;
     private static long lastFlush, lastHeartbeat;
     private static Object connection;
+    private static boolean clearRequested;
     private ShistSession() { }
 
     public static void init() {
@@ -41,6 +42,7 @@ public final class ShistSession {
             public void feedback(String message) { ShistClient.feedback(message); }
             public void complete(ShistEngine.Result result) { finish(result, true); }
             public void interrupted(ShistEngine.Result result) { finish(result, false); }
+            public void clearChat() { requestChatClear(); }
         }, () -> System.nanoTime() / 1_000_000);
         ClientTickEvents.END_CLIENT_TICK.register(ShistSession::tick);
         ClientLifecycleEvents.CLIENT_STOPPING.register(client -> {
@@ -86,6 +88,16 @@ public final class ShistSession {
             default -> throw new IllegalArgumentException(action);
         }
     }
+    public static void stop() {
+        if(engine!=null&&engine.active())control("cancel",0);
+    }
+    static void requestChatClear() { clearRequested=true; }
+    static void clearPendingChat() {
+        if(!clearRequested)return;
+        clearRequested=false;
+        MinecraftClient.getInstance().inGameHud.getChatHud().clear(false);
+        debug("CHAT CLEARED rendered messages only; command history/results retained");
+    }
     private static void tick(MinecraftClient client) {
         if (engine.active()) {
             if (client.getNetworkHandler() != connection || client.player == null) {
@@ -101,6 +113,7 @@ public final class ShistSession {
             if (now - lastHeartbeat >= 2000) { lastHeartbeat = now; debug("STATE " + engine.status()); }
         }
         long now = System.nanoTime() / 1_000_000;
+        clearPendingChat();
         if (now - lastFlush >= 250) { lastFlush = now; flush(); }
         if (logError != null) {
             ShistClient.feedback("Ошибка записи журнала: " + logError.getMessage()); logError = null;
@@ -126,6 +139,7 @@ public final class ShistSession {
                 StandardOpenOption.CREATE, StandardOpenOption.APPEND)) { writer.write(value); }
     }
     private static void finish(ShistEngine.Result result, boolean copy) {
+        clearPendingChat();
         String names = String.join(" ", result.accepted());
         Path destination = run;
         flush();

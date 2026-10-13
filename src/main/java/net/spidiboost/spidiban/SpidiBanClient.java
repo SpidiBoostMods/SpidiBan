@@ -31,33 +31,37 @@ public final class SpidiBanClient implements ClientModInitializer {
 
     @Override
     public void onInitializeClient() {
-        ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {
-            dispatcher.register(ClientCommandManager.literal("sb")
-                    .executes(context -> openEditor())
-                    .then(ClientCommandManager.literal("accept").executes(context -> accept(SpidiBanAutomation.Route.FUNPAY)))
-                    .then(ClientCommandManager.literal("cheats").executes(context -> accept(SpidiBanAutomation.Route.CHEATS)))
-                    .then(ClientCommandManager.literal("cancel").executes(context -> cancel()))
-                    .then(delayCommand()));
-            dispatcher.register(ClientCommandManager.literal("spidiban")
-                    .executes(context -> openEditor())
-                    .then(ClientCommandManager.literal("accept").executes(context -> accept(SpidiBanAutomation.Route.FUNPAY)))
-                    .then(ClientCommandManager.literal("cheats").executes(context -> accept(SpidiBanAutomation.Route.CHEATS)))
-                    .then(ClientCommandManager.literal("cancel").executes(context -> cancel()))
-                    .then(delayCommand()));
-            dispatcher.register(ClientCommandManager.literal("spidiboost")
-                    .executes(context -> openEditor())
-                    .then(ClientCommandManager.literal("accept").executes(context -> accept(SpidiBanAutomation.Route.FUNPAY)))
-                    .then(ClientCommandManager.literal("cheats").executes(context -> accept(SpidiBanAutomation.Route.CHEATS)))
-                    .then(ClientCommandManager.literal("cancel").executes(context -> cancel()))
-                    .then(delayCommand()));
-            LOGGER.info("Registered local commands: /sb, /spidiban and /spidiboost");
-        });
+        ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> registerCommands(dispatcher));
         ClientTickEvents.END_CLIENT_TICK.register(SpidiBanAutomation::tick);
         net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents.CLIENT_STOPPING.register(c -> SpidiBanAutomation.cancel());
         ClientReceiveMessageEvents.GAME.register((message, overlay) ->
                 SpidiBanAutomation.onIncomingMessage(message.getString()));
         ClientReceiveMessageEvents.CHAT.register((message, signedMessage, sender, params, receptionTimestamp) ->
                 SpidiBanAutomation.onIncomingMessage(message.getString()));
+    }
+    public static void registerCommands(com.mojang.brigadier.CommandDispatcher<net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource> dispatcher) {
+            dispatcher.register(ClientCommandManager.literal("sb")
+                    .executes(context -> openEditor())
+                    .then(ClientCommandManager.literal("accept").executes(context -> accept(SpidiBanAutomation.Route.FUNPAY)))
+                    .then(ClientCommandManager.literal("cheats").executes(context -> accept(SpidiBanAutomation.Route.CHEATS)))
+                    .then(ClientCommandManager.literal("cancel").executes(context -> cancel()))
+                    .then(ClientCommandManager.literal("stop").executes(context -> cancel()))
+                    .then(delayCommand()));
+            dispatcher.register(ClientCommandManager.literal("spidiban")
+                    .executes(context -> openEditor())
+                    .then(ClientCommandManager.literal("accept").executes(context -> accept(SpidiBanAutomation.Route.FUNPAY)))
+                    .then(ClientCommandManager.literal("cheats").executes(context -> accept(SpidiBanAutomation.Route.CHEATS)))
+                    .then(ClientCommandManager.literal("cancel").executes(context -> cancel()))
+                    .then(ClientCommandManager.literal("stop").executes(context -> cancel()))
+                    .then(delayCommand()));
+            dispatcher.register(ClientCommandManager.literal("spidiboost")
+                    .executes(context -> openEditor())
+                    .then(ClientCommandManager.literal("accept").executes(context -> accept(SpidiBanAutomation.Route.FUNPAY)))
+                    .then(ClientCommandManager.literal("cheats").executes(context -> accept(SpidiBanAutomation.Route.CHEATS)))
+                    .then(ClientCommandManager.literal("cancel").executes(context -> cancel()))
+                    .then(ClientCommandManager.literal("stop").executes(context -> cancel()))
+                    .then(delayCommand()));
+            LOGGER.info("Registered local commands: /sb, /spidiban and /spidiboost");
     }
 
     private static int openEditor() {
@@ -109,6 +113,7 @@ public final class SpidiBanClient implements ClientModInitializer {
 
     private static int cancel() {
         SpidiBanAutomation.cancel();
+        net.spidiboost.shist.ShistSession.stop();
         return Command.SINGLE_SUCCESS;
     }
 
@@ -129,7 +134,7 @@ public final class SpidiBanClient implements ClientModInitializer {
         String action = parts[1].trim();
         if (action.equalsIgnoreCase("accept")) accept(SpidiBanAutomation.Route.FUNPAY);
         else if (action.equalsIgnoreCase("cheats")) accept(SpidiBanAutomation.Route.CHEATS);
-        else if (action.equalsIgnoreCase("cancel")) cancel();
+        else if (action.equalsIgnoreCase("cancel") || action.equalsIgnoreCase("stop")) cancel();
         else if (action.equalsIgnoreCase("delay")) showDelay();
         else if (action.regionMatches(true, 0, "delay ", 0, 6)) {
             try {

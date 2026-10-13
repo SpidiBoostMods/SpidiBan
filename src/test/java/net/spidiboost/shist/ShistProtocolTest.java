@@ -84,6 +84,47 @@ public final class ShistProtocolTest {
             Harness h = new Harness("mute", 2); h.entry("Good", true); h.entry("Temp", true); h.beginChecks();
             h.reply("Good", "Попытка взлома", true); h.reply("Temp", "ЧСП", false); h.drain(); eq(h.result.accepted(), List.of("Good"));
         });
+        test("FP tokens excluded without broad FunPay or nickname substring matches", () -> {
+            for(String reason:List.of("fp","FP","fp_rw","FP_RW","Причина fp // rec","Покупка fp_rw by Admin","(fp)","fp-rw"))yes(ShistEngine.excludedReason(reason),reason);
+            for(String reason:List.of("FunPay","Покупка на FunPay","playerok","fps","fpga","nick_fp","spidifp","fp_rw_admin"))yes(!ShistEngine.excludedReason(reason),reason);
+            Harness h=new Harness("ban",3);for(String name:List.of("A","B","C"))h.entry(name,true);h.beginChecks();
+            h.reply("A","FP_RW",true);h.reply("B","fp",true);h.reply("C","FunPay",true);h.drain();eq(h.result.accepted(),List.of("C"));
+        });
+        test("aqua ban reason excluded independently of wording", () -> {
+            for(String reason:List.of("§bЧиты","§bЛив с проверки","§x§5§5§f§f§f§fЛюбая причина","§x§6§6§c§c§f§fCustom cyan")){
+                Harness h=one("ban");h.reply("Nick0",reason,true);h.drain();eq(h.result.accepted(),List.of());
+                yes(h.result.decisions().get("Nick0").startsWith("excluded aqua"),reason);
+            }
+        });
+        test("aqua timestamp label or metadata is not an aqua reason", () -> {
+            Harness h=one("ban");h.feed("§b[19:12:15] §6Цель [Nick0] забанена:\n§bПричина: §6Читы\n§bЗабанил: Moderator\n§6Окончание бана: навсегда\nIP бан: no, навсегда: yes");
+            h.drain();eq(h.result.accepted(),List.of("Nick0"));
+            for(String reason:List.of("§6Читы","§cЧиты","§9Читы","§3Читы","§fЧиты")){Harness other=one("ban");other.reply("Nick0",reason,true);other.drain();eq(other.result.accepted(),List.of("Nick0"));}
+        });
+        test("wrapped aqua reason excluded but colors reset for subsequent targets", () -> {
+            Harness h=new Harness("ban",2);h.entry("A",true);h.entry("B",true);h.beginChecks();
+            h.feed("Цель [A] забанена:\nПричина: Лив\n§bс проверки\nОкончание бана: навсегда\nIP бан: no, навсегда: yes");
+            h.advance(150);h.reply("B","§6Читы",true);h.drain();eq(h.result.accepted(),List.of("B"));
+        });
+        test("mute retains previous rules for aqua and FP reasons", () -> {
+            Harness h=new Harness("mute",2);h.entry("A",true);h.entry("B",true);h.beginChecks();h.reply("A","§bFP_RW",true);h.reply("B","fp",true);h.drain();eq(h.result.accepted(),List.of("A","B"));
+        });
+        test("chat cleanup every 20 history entries and check answers retains results", () -> {
+            for(String mode:List.of("ban","mute"))for(int size:new int[]{19,20,21,40,41}){
+                Harness h=new Harness(mode,size);for(int i=0;i<size;i++)h.entry("Nick"+i,true);
+                eq(h.clears,size/20);h.beginChecks();for(int i=0;i<size;i++)h.reply("Nick"+i,"Читы",true);h.drain();
+                eq(h.clears,2*(size/20));eq(h.result.accepted(),names(size));eq(h.checkSends(),size);
+            }
+        });
+        test("duplicates do not inflate cleanup and missing replies are cleaned per attempt", () -> {
+            Harness h=new Harness("ban",20);for(int i=0;i<20;i++){h.entry("Nick"+i,true);h.entry("Nick"+i,true);}eq(h.clears,1);
+            h.beginChecks();h.drain();eq(h.result.unresolved().size(),20);eq(h.checkSends(),60);eq(h.clears,4);
+        });
+        test("abort history or pending checks prevents future sends and preserves checkpoint", () -> {
+            Harness history=new Harness("ban",2);history.entry("A",true);history.engine.abort("stop");history.advance(20000);eq(history.checkSends(),0);yes(!history.engine.active(),"history still active");
+            Harness checks=new Harness("ban",2);checks.entry("A",true);checks.entry("B",true);checks.beginChecks();checks.reply("A","Читы",true);checks.engine.abort("stop");
+            int before=checks.checkSends();checks.advance(20000);checks.reply("B","Читы",true);eq(checks.checkSends(),before);eq(checks.checkpoint.accepted(),List.of("A"));eq(checks.checkpoint.unresolved(),List.of("B"));
+        });
         test("ten nicks and duplicated full responses never skip next nick", () -> {
             Harness h = new Harness("ban", 10);
             for (int i=0;i<10;i++) { h.entry("Nick"+i, true); h.entry("Nick"+i, true); }
@@ -392,7 +433,7 @@ public final class ShistProtocolTest {
     private static void yes(boolean condition,String message) { if(!condition) throw new AssertionError(message); }
     private static void expectError(Runnable task) { try { task.run(); } catch(IllegalArgumentException e) { return; } throw new AssertionError("expected input error"); }
     private static final class Harness implements ShistEngine.Sink {
-        long now; final List<String> sent=new ArrayList<>(), logs=new ArrayList<>(), histories=new ArrayList<>();
+        long now; int clears; final List<String> sent=new ArrayList<>(), logs=new ArrayList<>(), histories=new ArrayList<>();
         final List<Long> checkTimes=new ArrayList<>();
         final Map<String,List<String>> scheduledReplies=new HashMap<>();
         final Set<String> queriedNames=new HashSet<>();
@@ -432,5 +473,6 @@ public final class ShistProtocolTest {
         public void feedback(String message) { }
         public void complete(ShistEngine.Result result) { this.result=result; }
         public void interrupted(ShistEngine.Result result) { this.checkpoint=result; }
+        public void clearChat() { clears++; }
     }
 }

@@ -26,7 +26,7 @@ public final class ClientPlayNetworkHandlerMixin {
         // Vanilla re-enters this method on the client thread. Capturing both
         // HEAD invocations previously counted every packet twice.
         if (!MinecraftClient.getInstance().isOnThread() || packet.overlay()) return;
-        ShistSession.accept(packet.content().getString());
+        ShistSession.accept(net.spidiboost.shist.StyledMessages.formatted(packet.content()));
     }
 
 }

@@ -46,3 +46,27 @@ apply from: 'shared-updater.gradle'
 
 dependencies { testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'; testRuntimeOnly 'org.junit.platform:junit-platform-launcher' }
 test { useJUnitPlatform() }
+
+sourceSets { runtimeProbe {
+    compileClasspath += sourceSets.main.compileClasspath + sourceSets.main.output
+    runtimeClasspath += sourceSets.main.runtimeClasspath + sourceSets.main.output
+} }
+if(project.hasProperty('shistNative')) {
+    loom.mods { spidiban { sourceSet sourceSets.main }; spidiban_probe { sourceSet sourceSets.runtimeProbe } }
+    loom.runs { verification {
+        client(); source sourceSets.runtimeProbe; runDir 'build/runtime-verification'
+        programArgs '--username','SpidiBanQA'
+        if(System.getProperty('os.name').startsWith('Mac'))vmArg '-XstartOnFirstThread'
+    } }
+    tasks.named('runVerification',JavaExec) {
+        doFirst {
+            def options=file('build/runtime-verification/options.txt');options.parentFile.mkdirs()
+            options.text='onboardAccessibility:false\nlang:ru_ru\nmaxFps:60\npauseOnLostFocus:false\nsoundCategory_master:0.0\n'
+            file('build/runtime-verification/native-shist-results.txt').delete()
+        }
+        doLast {
+            def report=file('build/runtime-verification/native-shist-results.txt')
+            if(!report.isFile()||!report.text.contains('PASS')||report.text.contains('FAIL'))throw new GradleException('Native shist verification failed: '+report)
+        }
+    }
+}
