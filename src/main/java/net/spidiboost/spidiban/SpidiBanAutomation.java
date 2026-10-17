@@ -25,7 +25,10 @@ public final class SpidiBanAutomation {
     private static State state = State.IDLE;
     private static Route route;
     private static String activeName;
-    private static String cooldownName;
+    private static final BanInbox inbox = new BanInbox();
+    private static BanInbox.Delivery reply;
+    private static String administrator;
+    private static long requestedAt;
     private static long ticks;
     private static long stateStartedAt;
     private static long nextCommandAt;
@@ -71,8 +74,9 @@ public final class SpidiBanAutomation {
         state = State.WAITING_TO_SEND;
         nextCommandAt = ticks;
         banDelay.reset();
+        inbox.start();
+        reply = null;
         activeName = null;
-        cooldownName = null;
         rootRetries = 0;
         if (rejected > 0) SpidiBanClient.feedback("Пропущено некорректных никнеймов: " + rejected + ".");
         SpidiBanClient.feedback(route.label + ": в очереди " + PENDING.size() + " ник(а/ов); задержка " + delayDescription() + ".");
@@ -94,6 +98,9 @@ public final class SpidiBanAutomation {
         int id();
         int size();
         String name(int slot);
+        String administrator();
+        Object connection();
+        void close();
         void click(int slot);
         void send(String command);
     }
@@ -106,28 +113,47 @@ public final class SpidiBanAutomation {
         public int id() { return client.player.currentScreenHandler.syncId; }
         public int size() { return client.player.currentScreenHandler.slots.size(); }
         public String name(int slot) { return itemName(client.player.currentScreenHandler, slot); }
+        public String administrator() { return client.player.getGameProfile().getName(); }
+        public Object connection() { return client.player.networkHandler.getConnection(); }
+        public void close() { if (open()) client.player.closeHandledScreen(); }
         public void click(int slot) { SpidiBanAutomation.click(client, client.player.currentScreenHandler, slot); }
         public void send(String command) { client.player.networkHandler.sendChatCommand(command); }
     }
 
     static void advance(Menu menu, long now) {
         ticks++;
-        if (state == State.WAITING_TO_SEND) {
-            if (ticks >= nextCommandAt) sendNext(menu);
+        if (state == State.IDLE) return;
+        if (inbox.overflowed()) {
+            fail("слишком много ответов сервера; результат последнего бана не подтверждён");
             return;
         }
-        if (state == State.IDLE) return;
+        for (BanInbox.Delivery message; (message = inbox.poll()) != null;) {
+            if (message.connection() == menu.connection()) acceptEvidence(message);
+        }
+        if (reply != null) {
+            if (reply.evidence().kind() == BanEvidence.Kind.ISSUED) {
+                banDelay.complete(reply.receivedAt());
+                SpidiBanClient.LOGGER.info("Server confirmed ban: administrator={}, target={}", administrator, activeName);
+                SpidiBanClient.feedback("Бан для " + activeName + " подтверждён сервером.");
+            } else {
+                String reason = reply.evidence().kind() == BanEvidence.Kind.ALREADY_BANNED
+                        ? "уже забанен или нет прав" : "игрок не существует";
+                SpidiBanClient.feedback(activeName + ": " + reason + "; пропускаю без новой задержки.");
+                SpidiBanClient.LOGGER.info("Server rejected ban: target={}, result={}; cooldown unchanged", activeName, reply.evidence().kind());
+            }
+            if (menu.id() != handlerBeforeCommand) menu.close();
+            reply = null;
+            activeName = null;
+            sendNext(menu, now);
+            return;
+        }
+        if (state == State.WAITING_TO_SEND) {
+            if (ticks >= nextCommandAt) sendNext(menu, now);
+            return;
+        }
 
-        if (state == State.WAITING_FOR_CLOSE) {
-            if (!menu.open()) {
-                SpidiBanClient.feedback("Бан для " + activeName + " отправлен.");
-                banDelay.complete(confirmationTime);
-                cooldownName = activeName;
-                state = State.WAITING_TO_SEND;
-                nextCommandAt = ticks;
-                activeName = null;
-                sendNext(menu);
-            } else if (timedOut()) fail("окно выдачи не закрылось");
+        if (state == State.WAITING_FOR_RESULT) {
+            if (timedOut()) fail("сервер не подтвердил бан для " + activeName + "; повторной выдачи не будет");
             return;
         }
 
@@ -168,10 +194,11 @@ public final class SpidiBanAutomation {
             if (menu.name(26).equals("ВЫДАТЬ БАН")) {
                 if (!banDelay.ready(now)) return;
                 confirmationTime = now;
-                menu.click(26);
-                menu.click(26);
-                state = State.WAITING_FOR_CLOSE;
+                administrator = menu.administrator();
+                state = State.WAITING_FOR_RESULT;
                 stateStartedAt = ticks;
+                menu.click(26);
+                if (reply == null && state == State.WAITING_FOR_RESULT) menu.click(26);
             } else if (banDelay.ready(now) && timedOut()) fail("не найдена кнопка ВЫДАТЬ БАН");
         }
     }
@@ -195,45 +222,31 @@ public final class SpidiBanAutomation {
         int remaining = PENDING.size() + (activeName == null ? 0 : 1);
         PENDING.clear();
         activeName = null;
-        cooldownName = null;
+        inbox.stop();
+        reply = null;
         route = null;
         rootRetries = 0;
         state = State.IDLE;
         SpidiBanClient.feedback("Очередь отменена. Не обработано: " + remaining + ".");
     }
 
-    public static void onIncomingMessage(String message) {
-        // Packet HEAD hooks run first on Netty, then again after vanilla
-        // schedules the packet on the client thread. Only handle that second
-        // invocation: screens and queue state must never be changed on Netty.
-        if (!MinecraftClient.getInstance().isOnThread()) return;
-        if (state == State.IDLE || message == null) return;
-        String responseName = activeName;
-        if (responseName == null && state == State.WAITING_TO_SEND) responseName = cooldownName;
-        if (responseName == null) return;
-        // Server chat can have a [HH:mm:ss] prefix; punctuation/formatting is
-        // ignored, but require this exact player's full duplicate-ban reply.
-        String normalizedMessage = normalized(message).replaceAll("[^\\p{L}\\p{N}_]+", " ").trim();
-        String expectedReply = normalized("ИГРОК " + responseName
-                + " УЖЕ ЗАБАНЕН И У ВАС НЕТУ ПРАВ НА НОВЫЙ БАН");
-        boolean alreadyBanned = normalizedMessage.contains(expectedReply);
-        boolean playerDoesNotExist = normalizedMessage.contains("PLAYER DOES NOT EXIST");
-        if (!alreadyBanned && !playerDoesNotExist) return;
+    public static void captureServerMessage(Object connection, String message) {
+        inbox.capture(connection, message, System.nanoTime());
+    }
 
-        String skippedName = responseName;
-        if (MinecraftClient.getInstance().currentScreen instanceof HandledScreen<?>) {
-            MinecraftClient.getInstance().setScreen(null);
+    static void capture(Object connection, String message, long now) {
+        inbox.capture(connection, message, now);
+    }
+
+    private static void acceptEvidence(BanInbox.Delivery message) {
+        if (activeName == null || message.receivedAt() - requestedAt < 0) return;
+        BanEvidence evidence = message.evidence();
+        if (!evidence.forPlayer(activeName)) return;
+        if (evidence.kind() == BanEvidence.Kind.ISSUED) {
+            if (state != State.WAITING_FOR_RESULT || message.receivedAt() - confirmationTime < 0
+                    || !evidence.administrator().equalsIgnoreCase(administrator) || reply != null) return;
         }
-        activeName = null;
-        cooldownName = null;
-        rootRetries = 0;
-        state = State.WAITING_TO_SEND;
-        nextCommandAt = ticks;
-        // Clear the active name before adding our own chat line: ChatHudMixin
-        // sees locally-added messages too, and must not process this feedback
-        // as another server response.
-        String reason = alreadyBanned ? "уже забанен или нет прав" : "игрок не существует";
-        SpidiBanClient.feedback(skippedName + ": " + reason + "; перехожу к следующему нику без задержки.");
+        reply = message;
     }
 
     static void setDelaySeconds(double requestedSeconds) {
@@ -249,19 +262,22 @@ public final class SpidiBanAutomation {
         return BanDelay.describe(delaySeconds);
     }
 
-    private static void sendNext(Menu menu) {
+    private static void sendNext(Menu menu, long now) {
         activeName = PENDING.poll();
-        cooldownName = null;
+        reply = null;
         if (activeName == null) {
             state = State.IDLE;
+            inbox.stop();
             SpidiBanClient.feedback("Очередь завершена.");
             return;
         }
         handlerBeforeCommand = menu.id();
+        requestedAt = now;
+        administrator = menu.administrator();
         rootRetries = 0;
-        menu.send("banrw " + activeName);
         state = State.WAITING_FOR_ROOT;
         stateStartedAt = ticks;
+        menu.send("banrw " + activeName);
     }
 
     private static void retryOrFail(Menu menu) {
@@ -272,16 +288,12 @@ public final class SpidiBanAutomation {
         rootRetries++;
         SpidiBanClient.feedback("Меню не появилось для " + activeName + "; повтор " + rootRetries + "/" + MAX_ROOT_RETRIES + ".");
         handlerBeforeCommand = menu.id();
-        menu.send("banrw " + activeName);
         stateStartedAt = ticks;
+        menu.send("banrw " + activeName);
     }
 
     private static boolean isRootMenu(HandledScreen<?> screen, ScreenHandler handler) {
         return normalized(screen.getTitle().getString()).contains("БАН") && handler.slots.size() >= 27;
-    }
-
-    private static boolean hasExactName(ScreenHandler handler, int slot, String expected) {
-        return itemName(handler, slot).equals(normalized(expected));
     }
 
     private static String itemName(ScreenHandler handler, int slot) {
@@ -344,16 +356,18 @@ public final class SpidiBanAutomation {
     }
 
     private static void fail(String reason) {
+        SpidiBanClient.LOGGER.warn("Ban queue stopped: target={}, state={}, pending={}, reason={}", activeName, state, PENDING.size(), reason);
         SpidiBanClient.feedback("Остановлено: " + reason + ". Осталось в очереди: " + PENDING.size() + ".");
         PENDING.clear();
         activeName = null;
-        cooldownName = null;
+        inbox.stop();
+        reply = null;
         rootRetries = 0;
         route = null;
         state = State.IDLE;
     }
 
     private enum State {
-        IDLE, WAITING_TO_SEND, WAITING_FOR_ROOT, WAITING_FOR_REASON, WAITING_FOR_SILENT_BAN, WAITING_FOR_ISSUE, WAITING_FOR_CLOSE
+        IDLE, WAITING_TO_SEND, WAITING_FOR_ROOT, WAITING_FOR_REASON, WAITING_FOR_SILENT_BAN, WAITING_FOR_ISSUE, WAITING_FOR_RESULT
     }
 }

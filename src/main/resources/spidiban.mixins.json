@@ -3,6 +3,6 @@
   "minVersion": "0.8",
   "package": "net.spidiboost.spidiban.mixin",
   "compatibilityLevel": "JAVA_21",
-  "client": ["ChatScreenMixin", "ClientPlayNetworkHandlerMixin", "ClientInputMixin", "KeyboardMixin"],
+  "client": ["ChatScreenMixin", "ClientPlayNetworkHandlerMixin", "ServerEvidenceMixin", "ClientInputMixin", "KeyboardMixin"],
   "injectors": { "defaultRequire": 1 }
 }

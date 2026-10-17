@@ -1,0 +1,1 @@
+{"required":true,"package":"net.spidiboost.banprobe.mixin","compatibilityLevel":"JAVA_21","client":["HiddenPacketMixin"],"injectors":{"defaultRequire":1}}
