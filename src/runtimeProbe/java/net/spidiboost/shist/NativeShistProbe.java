@@ -77,6 +77,7 @@ public final class NativeShistProbe implements ClientModInitializer {
             Text parent=Text.empty().formatted(Formatting.AQUA).append(Text.literal("Причина: Лив\nс проверки"));
             require(ReasonColors.hasAqua(StyledMessages.formatted(parent).split("\n")[0],false),"inherited parent RGB lost");
             evidence.add("PASS aqua reason only; timestamps/label ignored; inherited and newline Text colors retained");
+            evidence.add(net.spidiboost.spidiban.NativeBanProbe.run(client));
             Files.writeString(report,String.join("\n",evidence)+"\n");
         }catch(Throwable error){error.printStackTrace();try{Files.writeString(report,"FAIL "+error+"\n");}catch(Exception ignored){}}
         finally{try{if(original!=null){var f=ShistSession.class.getDeclaredField("engine");f.setAccessible(true);f.set(null,original);}}catch(Exception ignored){}client.scheduleStop();}
