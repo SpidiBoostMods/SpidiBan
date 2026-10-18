@@ -1,7 +1,10 @@
 package net.spidiboost.spidiban.mixin;
 
 import net.minecraft.client.network.ClientPlayNetworkHandler;
+import net.minecraft.network.packet.s2c.play.ChatMessageS2CPacket;
+import net.minecraft.network.packet.s2c.play.GameMessageS2CPacket;
 import net.spidiboost.spidiban.SpidiBanClient;
+import net.spidiboost.spidiban.SpidiBanAutomation;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -24,4 +27,16 @@ public final class ClientPlayNetworkHandlerMixin {
         if (SpidiBanClient.tryHandleInput(message)) ci.cancel();
     }
 
+    @Inject(method = "onGameMessage", at = @At("HEAD"))
+    private void spidiban$serverGameMessage(GameMessageS2CPacket packet, CallbackInfo ci) {
+        SpidiBanAutomation.onIncomingMessage(packet.content().getString());
+    }
+
+    @Inject(method = "onChatMessage", at = @At("HEAD"))
+    private void spidiban$serverChatMessage(ChatMessageS2CPacket packet, CallbackInfo ci) {
+        String message = packet.unsignedContent() == null
+                ? packet.body().content()
+                : packet.unsignedContent().getString();
+        SpidiBanAutomation.onIncomingMessage(message);
+    }
 }

@@ -1,1 +1,1 @@
-{"schemaVersion":1,"id":"spidiban_probe","version":"1","environment":"client","entrypoints":{"client":["net.spidiboost.shist.NativeShistProbe"]},"mixins":["spidiban-probe.mixins.json"],"depends":{"spidiban":"*"}}
+{"schemaVersion":1,"id":"spidiban_probe","version":"1","environment":"client","entrypoints":{"client":["net.spidiboost.shist.NativeShistProbe"]},"depends":{"spidiban":"*"}}
