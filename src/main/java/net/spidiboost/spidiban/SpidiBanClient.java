@@ -1,7 +1,7 @@
 package net.spidiboost.spidiban;
 
 import com.mojang.brigadier.Command;
-import com.mojang.brigadier.arguments.StringArgumentType;
+import com.mojang.brigadier.arguments.DoubleArgumentType;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
@@ -81,8 +81,8 @@ public final class SpidiBanClient implements ClientModInitializer {
     private static com.mojang.brigadier.builder.LiteralArgumentBuilder<net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource> delayCommand() {
         return ClientCommandManager.literal("delay")
                 .executes(context -> showDelay())
-                .then(ClientCommandManager.argument("seconds", StringArgumentType.greedyString())
-                        .executes(context -> parseDelay(StringArgumentType.getString(context, "seconds"))));
+                .then(ClientCommandManager.argument("seconds", DoubleArgumentType.doubleArg(0.0D, 3600.0D))
+                        .executes(context -> setDelay(DoubleArgumentType.getDouble(context, "seconds"))));
     }
 
     private static int accept(SpidiBanAutomation.Route route) {
@@ -111,15 +111,6 @@ public final class SpidiBanClient implements ClientModInitializer {
         return Command.SINGLE_SUCCESS;
     }
 
-    private static int parseDelay(String value) {
-        try {
-            return setDelay(BanDelay.parse(value));
-        } catch (IllegalArgumentException exception) {
-            feedback("Задержка должна быть числом от 0 до 3600 секунд, например 5.10 или 10,01.");
-            return 0;
-        }
-    }
-
     private static int cancel() {
         if(SpidiBanAutomation.isActive()||!net.spidiboost.shist.ShistSession.active())SpidiBanAutomation.cancel();
         net.spidiboost.shist.ShistSession.stop();
@@ -146,7 +137,11 @@ public final class SpidiBanClient implements ClientModInitializer {
         else if (action.equalsIgnoreCase("cancel") || action.equalsIgnoreCase("stop")) cancel();
         else if (action.equalsIgnoreCase("delay")) showDelay();
         else if (action.regionMatches(true, 0, "delay ", 0, 6)) {
-            parseDelay(action.substring(6));
+            try {
+                setDelay(Double.parseDouble(action.substring(6).trim()));
+            } catch (NumberFormatException exception) {
+                feedback("Задержка должна быть числом от 0 до 3600 секунд.");
+            }
         } else return false;
         return true;
     }

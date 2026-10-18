@@ -19,6 +19,7 @@ import java.util.Set;
 public final class SpidiBanAutomation {
     private static final long STEP_TIMEOUT_TICKS = 20L * 12L;
     private static final double DEFAULT_DELAY_SECONDS = 5.0D;
+    private static final double MAX_DELAY_SECONDS = 3600.0D;
     private static final String CONFIG_NAME = "sbb.cfg";
     private static final ArrayDeque<String> PENDING = new ArrayDeque<>();
 
@@ -29,8 +30,7 @@ public final class SpidiBanAutomation {
     private static long ticks;
     private static long stateStartedAt;
     private static long nextCommandAt;
-    private static final BanDelay banDelay = new BanDelay(DEFAULT_DELAY_SECONDS);
-    private static long confirmationTime;
+    private static long banCooldownTicks = secondsToTicks(DEFAULT_DELAY_SECONDS);
     private static double delaySeconds = DEFAULT_DELAY_SECONDS;
     private static int handlerBeforeCommand;
     private static boolean configLoaded;
@@ -69,8 +69,8 @@ public final class SpidiBanAutomation {
         PENDING.addAll(parsed);
         route = requestedRoute;
         state = State.WAITING_TO_SEND;
-        nextCommandAt = ticks;
-        banDelay.reset();
+        // Let the player settle before issuing the first ban command.
+        nextCommandAt = ticks + 10L;
         activeName = null;
         cooldownName = null;
         rootRetries = 0;
@@ -80,99 +80,71 @@ public final class SpidiBanAutomation {
     }
 
     static void tick(MinecraftClient client) {
-        ensureConfigLoaded(client);
-        if (client.player == null) {
-            if (isActive()) cancel();
-            return;
-        }
-        advance(new ClientMenu(client), System.nanoTime());
-    }
-
-    interface Menu {
-        boolean open();
-        boolean root();
-        int id();
-        int size();
-        String name(int slot);
-        void click(int slot);
-        void send(String command);
-    }
-
-    private record ClientMenu(MinecraftClient client) implements Menu {
-        public boolean open() { return client.currentScreen instanceof HandledScreen<?>; }
-        public boolean root() {
-            return client.currentScreen instanceof HandledScreen<?> screen && isRootMenu(screen, client.player.currentScreenHandler);
-        }
-        public int id() { return client.player.currentScreenHandler.syncId; }
-        public int size() { return client.player.currentScreenHandler.slots.size(); }
-        public String name(int slot) { return itemName(client.player.currentScreenHandler, slot); }
-        public void click(int slot) { SpidiBanAutomation.click(client, client.player.currentScreenHandler, slot); }
-        public void send(String command) { client.player.networkHandler.sendChatCommand(command); }
-    }
-
-    static void advance(Menu menu, long now) {
         ticks++;
+        ensureConfigLoaded(client);
+        if (client.player == null) return;
         if (state == State.WAITING_TO_SEND) {
-            if (ticks >= nextCommandAt) sendNext(menu);
+            if (ticks >= nextCommandAt) sendNext(client);
             return;
         }
         if (state == State.IDLE) return;
 
         if (state == State.WAITING_FOR_CLOSE) {
-            if (!menu.open()) {
+            if (client.currentScreen == null) {
                 SpidiBanClient.feedback("Бан для " + activeName + " отправлен.");
-                banDelay.complete(confirmationTime);
                 cooldownName = activeName;
                 state = State.WAITING_TO_SEND;
-                nextCommandAt = ticks;
+                nextCommandAt = ticks + banCooldownTicks;
                 activeName = null;
-                sendNext(menu);
             } else if (timedOut()) fail("окно выдачи не закрылось");
             return;
         }
 
-        if (!menu.open()) {
-            if (timedOut()) retryOrFail(menu);
+        if (!(client.currentScreen instanceof HandledScreen<?> screen)) {
+            if (timedOut()) retryOrFail(client);
             return;
         }
-        if (menu.size() < 27) {
+        ScreenHandler handler = client.player.currentScreenHandler;
+        if (handler.slots.size() < 27) {
             if (timedOut()) fail("в меню недостаточно слотов");
             return;
         }
 
         if (state == State.WAITING_FOR_ROOT) {
-            if (menu.id() != handlerBeforeCommand && menu.root()) {
+            if (handler.syncId != handlerBeforeCommand && isRootMenu(screen, handler)) {
                 int slot = route == Route.FUNPAY ? 15 : 13;
                 String name = route == Route.FUNPAY ? "FUNPAY" : "ЧИТЫ И МОДЫ";
-                if (menu.name(slot).equals(normalized(name))) {
-                    menu.click(slot);
+                if (hasExactName(handler, slot, name)) {
+                    click(client, handler, slot);
                     state = State.WAITING_FOR_REASON;
                     stateStartedAt = ticks;
                 } else if (timedOut()) fail("не найден пункт " + name);
-            } else if (timedOut()) retryOrFail(menu);
+            } else if (timedOut()) retryOrFail(client);
         } else if (state == State.WAITING_FOR_REASON) {
             int slot = route == Route.FUNPAY ? 1 : 0;
             String name = route == Route.FUNPAY ? "FP_RW" : "Читы";
-            if (menu.name(slot).equals(normalized(name))) {
-                menu.click(slot);
+            if (hasExactName(handler, slot, name)) {
+                click(client, handler, slot);
                 state = route == Route.FUNPAY ? State.WAITING_FOR_ISSUE : State.WAITING_FOR_SILENT_BAN;
                 stateStartedAt = ticks;
             } else if (timedOut()) fail("не найден пункт " + name);
         } else if (state == State.WAITING_FOR_SILENT_BAN) {
-            if (menu.name(24).equals(normalized("Тихий бан: выкл")) && menu.name(26).equals("ВЫДАТЬ БАН")) {
-                menu.click(24);
-                state = State.WAITING_FOR_ISSUE;
+            // Both controls share this window. Their names are verified before
+            // the requested rapid sequence is sent to the server.
+            if (hasExactName(handler, 24, "Тихий бан: выкл") && hasExactName(handler, 26, "ВЫДАТЬ БАН")) {
+                click(client, handler, 24);
+                click(client, handler, 26);
+                click(client, handler, 26);
+                state = State.WAITING_FOR_CLOSE;
                 stateStartedAt = ticks;
             } else if (timedOut()) fail("не найдены Тихий бан: выкл или ВЫДАТЬ БАН");
         } else if (state == State.WAITING_FOR_ISSUE) {
-            if (menu.name(26).equals("ВЫДАТЬ БАН")) {
-                if (!banDelay.ready(now)) return;
-                confirmationTime = now;
-                menu.click(26);
-                menu.click(26);
+            if (hasExactName(handler, 26, "ВЫДАТЬ БАН")) {
+                click(client, handler, 26);
+                click(client, handler, 26);
                 state = State.WAITING_FOR_CLOSE;
                 stateStartedAt = ticks;
-            } else if (banDelay.ready(now) && timedOut()) fail("не найдена кнопка ВЫДАТЬ БАН");
+            } else if (timedOut()) fail("не найдена кнопка ВЫДАТЬ БАН");
         }
     }
 
@@ -238,18 +210,18 @@ public final class SpidiBanAutomation {
 
     static void setDelaySeconds(double requestedSeconds) {
         ensureConfigLoaded(MinecraftClient.getInstance());
-        BanDelay.validate(requestedSeconds);
-        delaySeconds = requestedSeconds;
-        banDelay.set(delaySeconds);
+        delaySeconds = Math.max(0.0D, Math.min(MAX_DELAY_SECONDS, requestedSeconds));
+        banCooldownTicks = secondsToTicks(delaySeconds);
         saveConfig(MinecraftClient.getInstance());
     }
 
     static String delayDescription() {
         ensureConfigLoaded(MinecraftClient.getInstance());
-        return BanDelay.describe(delaySeconds);
+        if (delaySeconds == Math.rint(delaySeconds)) return String.format(Locale.ROOT, "%.0f сек", delaySeconds);
+        return String.format(Locale.ROOT, "%.3f сек", delaySeconds).replaceAll("0+ сек$", " сек");
     }
 
-    private static void sendNext(Menu menu) {
+    private static void sendNext(MinecraftClient client) {
         activeName = PENDING.poll();
         cooldownName = null;
         if (activeName == null) {
@@ -257,22 +229,22 @@ public final class SpidiBanAutomation {
             SpidiBanClient.feedback("Очередь завершена.");
             return;
         }
-        handlerBeforeCommand = menu.id();
+        handlerBeforeCommand = client.player.currentScreenHandler.syncId;
         rootRetries = 0;
-        menu.send("banrw " + activeName);
+        client.player.networkHandler.sendChatCommand("banrw " + activeName);
         state = State.WAITING_FOR_ROOT;
         stateStartedAt = ticks;
     }
 
-    private static void retryOrFail(Menu menu) {
+    private static void retryOrFail(MinecraftClient client) {
         if (rootRetries >= MAX_ROOT_RETRIES) {
             fail("не дождались нужного меню после " + MAX_ROOT_RETRIES + " повторов для " + activeName);
             return;
         }
         rootRetries++;
         SpidiBanClient.feedback("Меню не появилось для " + activeName + "; повтор " + rootRetries + "/" + MAX_ROOT_RETRIES + ".");
-        handlerBeforeCommand = menu.id();
-        menu.send("banrw " + activeName);
+        handlerBeforeCommand = client.player.currentScreenHandler.syncId;
+        client.player.networkHandler.sendChatCommand("banrw " + activeName);
         stateStartedAt = ticks;
     }
 
@@ -303,6 +275,10 @@ public final class SpidiBanAutomation {
         return ticks - stateStartedAt > STEP_TIMEOUT_TICKS;
     }
 
+    private static long secondsToTicks(double seconds) {
+        return Math.max(0L, Math.round(seconds * 20.0D));
+    }
+
     private static void ensureConfigLoaded(MinecraftClient client) {
         if (configLoaded) return;
         configLoaded = true;
@@ -314,17 +290,18 @@ public final class SpidiBanAutomation {
                         .replace("\\n", "\n").split("\\R")) {
                     String trimmed = line.trim();
                     if (trimmed.startsWith("delaySeconds=")) {
-                        delaySeconds = BanDelay.parse(trimmed.substring("delaySeconds=".length()));
-                        banDelay.set(delaySeconds);
+                        delaySeconds = Math.max(0.0D, Math.min(MAX_DELAY_SECONDS,
+                                Double.parseDouble(trimmed.substring("delaySeconds=".length()).trim())));
+                        banCooldownTicks = secondsToTicks(delaySeconds);
                     }
                 }
             } else {
                 saveConfig(client);
             }
-        } catch (IOException | IllegalArgumentException exception) {
+        } catch (IOException | NumberFormatException exception) {
             SpidiBanClient.LOGGER.warn("Could not read {}. Using {} seconds.", CONFIG_NAME, DEFAULT_DELAY_SECONDS, exception);
             delaySeconds = DEFAULT_DELAY_SECONDS;
-            banDelay.set(delaySeconds);
+            banCooldownTicks = secondsToTicks(delaySeconds);
         }
     }
 
