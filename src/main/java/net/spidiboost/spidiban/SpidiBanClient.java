@@ -13,7 +13,6 @@ import net.minecraft.util.Formatting;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.awt.Desktop;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -23,11 +22,7 @@ import java.util.concurrent.CompletableFuture;
 /** Entry point for the standalone SpidiBan client mod. */
 public final class SpidiBanClient implements ClientModInitializer {
     static final Logger LOGGER = LoggerFactory.getLogger("SpidiBan");
-    private static final String FILE_NAME = "spidiban-nicknames.txt";
-    private static final String FILE_TEMPLATE = "# Вставьте никнеймы ниже.\\n"
-            + "# Разделители: пробел, запятая или точка с запятой.\\n"
-            + "# Сохраните файл, затем используйте /sb accept (FunPay) или /sb cheats (Читы).\\n"
-            + "# Задержка между банами: /sb delay 6\\n\\n";
+    private static final String FILE_NAME = NicknameFile.NAME;
 
     @Override
     public void onInitializeClient() {
@@ -66,15 +61,23 @@ public final class SpidiBanClient implements ClientModInitializer {
 
     private static int openEditor() {
         MinecraftClient client = MinecraftClient.getInstance();
-        Path file = nicknamesFile(client);
-        try {
-            if (Files.notExists(file)) Files.writeString(file, FILE_TEMPLATE, StandardCharsets.UTF_8);
-            CompletableFuture.runAsync(() -> openInTextEditor(file));
-            feedback("Открыт " + file.getFileName() + ". Сохраните его и введите /sb accept.");
-        } catch (IOException e) {
-            LOGGER.error("Could not create SpidiBan nickname file", e);
-            feedback("Не удалось создать " + FILE_NAME + ".");
-        }
+        CompletableFuture.runAsync(() -> {
+            Path file;
+            try {
+                file = nicknamesFile(client);
+            } catch (IOException | SecurityException error) {
+                LOGGER.error("Could not create SpidiBan nickname file", error);
+                client.execute(() -> feedback("Не удалось создать файл: " + error.getMessage()));
+                return;
+            }
+            try {
+                NicknameFile.open(file);
+                client.execute(() -> feedback("Файл передан редактору. Сохраните список и введите /sb accept или /sb cheats."));
+            } catch (IOException | SecurityException error) {
+                LOGGER.error("Could not open SpidiBan nickname file: {}", file, error);
+                client.execute(() -> feedback("Не удалось открыть редактор. Откройте файл вручную: " + file));
+            }
+        });
         return Command.SINGLE_SUCCESS;
     }
 
@@ -86,8 +89,8 @@ public final class SpidiBanClient implements ClientModInitializer {
     }
 
     private static int accept(SpidiBanAutomation.Route route) {
-        Path file = nicknamesFile(MinecraftClient.getInstance());
         try {
+            Path file = nicknamesFile(MinecraftClient.getInstance());
             if (Files.notExists(file)) {
                 feedback("Сначала откройте файл через /sb.");
                 return Command.SINGLE_SUCCESS;
@@ -146,25 +149,8 @@ public final class SpidiBanClient implements ClientModInitializer {
         return true;
     }
 
-    private static Path nicknamesFile(MinecraftClient client) {
-        return client.runDirectory.toPath().resolve(FILE_NAME);
-    }
-
-    private static void openInTextEditor(Path file) {
-        try {
-            if (System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("mac")) {
-                new ProcessBuilder("open", "-a", "TextEdit", file.toString()).start();
-                LOGGER.info("Opened SpidiBan nickname file in TextEdit: {}", file);
-                return;
-            }
-            if (!Desktop.isDesktopSupported() || !Desktop.getDesktop().isSupported(Desktop.Action.OPEN)) {
-                LOGGER.warn("Desktop file opening is unavailable; file is at {}", file);
-                return;
-            }
-            Desktop.getDesktop().open(file.toFile());
-        } catch (IOException | SecurityException e) {
-            LOGGER.error("Could not open SpidiBan nickname file in the default editor", e);
-        }
+    private static Path nicknamesFile(MinecraftClient client) throws IOException {
+        return NicknameFile.prepare(net.fabricmc.loader.api.FabricLoader.getInstance().getConfigDir(), client.runDirectory.toPath());
     }
 
     static void feedback(String message) {

@@ -33,6 +33,11 @@ public final class NativeShistProbe implements ClientModInitializer {
         if(finished||++ticks<40||!(client.currentScreen instanceof net.minecraft.client.gui.screen.TitleScreen)||client.getOverlay()!=null)return;finished=true;
         Path report=client.runDirectory.toPath().resolve("native-shist-results.txt");var evidence=new ArrayList<String>();Object original=null;
         try{
+            var nicknameMethod=SpidiBanClient.class.getDeclaredMethod("nicknamesFile",MinecraftClient.class);nicknameMethod.setAccessible(true);
+            Path nicknamePath=(Path)nicknameMethod.invoke(null,client);
+            require(nicknamePath.equals(net.fabricmc.loader.api.FabricLoader.getInstance().getConfigDir().toAbsolutePath().normalize().resolve("spidiban-nicknames.txt")),"nickname file outside Fabric config directory");
+            require(Files.isRegularFile(nicknamePath)&&Files.readString(nicknamePath).contains("\n# Разделители"),"nickname template missing or malformed");
+            evidence.add("PASS native client creates nickname file in Fabric config directory with real line breaks");
             var field=ShistSession.class.getDeclaredField("engine");field.setAccessible(true);original=field.get(null);
             require(Arrays.stream(net.minecraft.client.network.ClientPlayNetworkHandler.class.getDeclaredMethods()).anyMatch(m->m.getName().contains("spidiban$game")),"packet mixin not applied");
             var dispatcher=new CommandDispatcher<FabricClientCommandSource>();SpidiBanClient.registerCommands(dispatcher);ShistClient.registerCommands(dispatcher);

@@ -47,7 +47,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           version="${GITHUB_REF_NAME#v}"
-          gh release create "$GITHUB_REF_NAME" --verify-tag --title "spidiboost.SpidiBan $version" --generate-notes \
+          gh release create "$GITHUB_REF_NAME" --verify-tag --latest --title "spidiboost.SpidiBan $version" --generate-notes \
             "build/libs/SpidiBan-1.21.4-$version.jar" \
             "build/libs/SpidiBan-1.21.4-$version-source-project.zip" \
             build/libs/spidiban-update.properties
