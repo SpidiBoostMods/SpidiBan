@@ -15,7 +15,9 @@ with zipfile.ZipFile(jar) as z:
  assert not any('verification/' in n or 'runtimeProbe/' in n for n in z.namelist())
  assert not any(x in json.dumps(d).lower() for x in ('chatgpt','codex','codec'))
  for n in z.namelist():
-  if n.endswith('.class'):assert int.from_bytes(z.read(n)[6:8],'big')==65
+  if n.endswith('.class'):
+   assert int.from_bytes(z.read(n)[6:8],'big')==65
+   assert b'java/net/http/' not in z.read(n), 'Async HTTP client remains: '+n
  if spec['id']=='spidiban':
   assert 'net/spidiboost/shist/ShistEngine.class' in z.namelist()
   assert 'spidiban-shist.mixins.json' in z.namelist()
