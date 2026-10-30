@@ -64,7 +64,9 @@ class FamilyUpdaterTest {
         var p=plan(2);var a=p.changes().getFirst();var bad1=new BatchPlan.Change(a.target(),root.resolve("Foreign-1.21.4-1.1.0.jar"),a.staged(),a.oldHash(),a.newHash());assertThrows(IOException.class,()->BatchInstall.install(new BatchPlan(p.pid(),p.game(),List.of(bad1),List.of(),p.cwd(),List.of(),false)));
         var b=p.changes().get(1);var bad2=new BatchPlan.Change(b.target(),a.destination(),b.staged(),b.oldHash(),b.newHash());assertThrows(IOException.class,()->BatchInstall.validate(new BatchPlan(p.pid(),p.game(),List.of(a,bad2),List.of(),p.cwd(),List.of(),false)));
     }
-    @Test void helperWaitsForOwningJvmAndRestartsOnceAfterAllFilesChange()throws Exception {
+    @Test void helperWaitsForOwningJvmAndRestartsOnceAfterAllFilesChange()throws Exception { helperExit(true); }
+    @Test void switchingOffWhileHelperWaitsStillInstallsButNeverRestarts()throws Exception { helperExit(false); }
+    private void helperExit(boolean restart)throws Exception {
         var p=plan(4);Path java=Path.of(System.getProperty("java.home"),"bin",System.getProperty("os.name").startsWith("Windows")?"java.exe":"java");Path code=root.resolve("Fixture.java");
         Files.writeString(code,"import java.nio.file.*; public class Fixture {public static void main(String[] a)throws Exception{if(a.length==0){System.out.println(\"LIVE\");System.out.flush();System.in.read();}else Files.writeString(Path.of(a[0]),\"restart\\n\",StandardOpenOption.CREATE,StandardOpenOption.APPEND);}}");
         Path javac=java.resolveSibling(System.getProperty("os.name").startsWith("Windows")?"javac.exe":"javac");assertEquals(0,new ProcessBuilder(javac.toString(),"-d",root.toString(),code.toString()).inheritIO().start().waitFor());
@@ -74,8 +76,8 @@ class FamilyUpdaterTest {
         Path agent=p.game().resolve(".spidiboost-updates/agent.jar");Files.copy(Path.of("build/shared-agent/spidiban-shared-update-agent.jar"),agent);Path marker=fixtureDir.resolve("restarted.txt");
         var actual=new BatchPlan(old.pid(),p.game(),p.changes(),List.of(),fixtureDir,List.of(java.toString(),"-cp",".","Fixture","restarted.txt"),false);
         Process helper=new ProcessBuilder(java.toString(),"-jar","agent.jar").directory(agent.getParent().toFile()).redirectError(ProcessBuilder.Redirect.INHERIT).start();
-        try{try(var pipe=helper.getOutputStream()){actual.write(pipe);}assertEquals("READY",new BufferedReader(new InputStreamReader(helper.getInputStream())).readLine());assertOriginals(p);assertFalse(Files.exists(marker));old.getOutputStream().write(1);old.getOutputStream().flush();assertTrue(old.waitFor(10,TimeUnit.SECONDS));assertTrue(helper.waitFor(20,TimeUnit.SECONDS));assertEquals(0,helper.exitValue());
-            for(int i=0;i<100&&!Files.exists(marker);i++)Thread.sleep(50);assertEquals("restart\n",Files.readString(marker));for(var c:p.changes())assertEquals(c.newHash(),BatchInstall.hash(c.destination()));
+        try{try(var pipe=helper.getOutputStream()){actual.write(pipe);}assertEquals("READY",new BufferedReader(new InputStreamReader(helper.getInputStream())).readLine());assertOriginals(p);assertFalse(Files.exists(marker));RestartPolicy.set(p.game(),restart);old.getOutputStream().write(1);old.getOutputStream().flush();assertTrue(old.waitFor(10,TimeUnit.SECONDS));assertTrue(helper.waitFor(20,TimeUnit.SECONDS));assertEquals(0,helper.exitValue());
+            if(restart){for(int i=0;i<100&&!Files.exists(marker);i++)Thread.sleep(50);assertEquals("restart\n",Files.readString(marker));}else assertFalse(Files.exists(marker));for(var c:p.changes())assertEquals(c.newHash(),BatchInstall.hash(c.destination()));
         }finally{old.destroyForcibly();helper.destroyForcibly();}
     }
     @Test void obsoleteHistAddonIsBackedUpAndRemovedOnlyWithSuccessfulBatch()throws Exception {

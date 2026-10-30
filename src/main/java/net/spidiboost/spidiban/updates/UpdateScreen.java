@@ -18,6 +18,7 @@ public final class UpdateScreen extends Screen {
     @Override protected void init() {if(!restarting)addDrawableChild(ButtonWidget.builder(Text.literal("Продолжить"),b->close()).dimensions(width/2-70,height-35,140,20).build());}
     @Override public boolean shouldCloseOnEsc(){return !restarting;}
     @Override public void close(){if(!restarting&&client!=null)client.setScreen(previous);}
+    public void cancelRestart(){if(client!=null)client.setScreen(previous);}
     public static Text gradient(String value) {
         var text=Text.empty();int[] cp=value.codePoints().toArray();for(int i=0;i<cp.length;i++) {
             double t=cp.length<2?0:(double)i/(cp.length-1);int r=(int)(255+(255-255)*t),g=(int)(105+(207-105)*t),b=(int)(191+(133-191)*t);

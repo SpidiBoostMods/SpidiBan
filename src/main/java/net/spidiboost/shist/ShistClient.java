@@ -35,6 +35,11 @@ public final class ShistClient implements ClientModInitializer {
                     }
                     return builder.buildFuture();
                 });
+                var all = ClientCommandManager.literal("all");
+                for (String mode : new String[]{"ban", "mute"}) all.then(ClientCommandManager.literal(mode).then(ClientCommandManager.argument("count", IntegerArgumentType.integer(1,10000)).executes(ctx -> {
+                    ShistSession.startAll(mode, IntegerArgumentType.getInteger(ctx,"count")); return 1;
+                })));
+                shist.then(all);
                 for (String mode : new String[]{"ban", "mute"}) {
                     name.then(ClientCommandManager.literal(mode).executes(ctx -> {
                         ShistSession.start(nickname(ctx), mode, 10, false); return 1;
@@ -52,6 +57,7 @@ public final class ShistClient implements ClientModInitializer {
                 // the one-word control and nickname + ban/mute branches working.
                 var nicknameNode = name.build();
                 for (var node : shist.getArguments()) {
+                    if (node.getName().equals("all")) continue;
                     node.addChild(nicknameNode.getChild("ban"));
                     node.addChild(nicknameNode.getChild("mute"));
                 }
@@ -68,6 +74,7 @@ public final class ShistClient implements ClientModInitializer {
             ShistCommand command = ShistCommand.parse(input);
             if (command == null) return false;
             if (command.action() != null) ShistSession.control(command.action(), command.speed());
+            else if (command.nickname().equalsIgnoreCase("all")) ShistSession.startAll(command.mode(), command.count() == null ? 10 : command.count());
             else ShistSession.start(command.nickname(), command.mode(), command.count() == null ? 10 : command.count(), command.count() != null);
         } catch (IllegalArgumentException error) { feedback(error.getMessage()); }
         return true;

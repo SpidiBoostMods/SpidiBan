@@ -26,6 +26,28 @@ public final class ShistSession {
     private static long lastFlush, lastHeartbeat;
     private static Object connection;
     private static boolean clearRequested;
+    private static final java.util.ArrayDeque<String> batch = new java.util.ArrayDeque<>();
+    private static String batchMode;
+    private static int batchCount;
+    private static boolean batchRun;
+    private static final java.util.LinkedHashSet<String> batchAccepted = new java.util.LinkedHashSet<>();
+    public static void startAll(String mode, int count) {
+        if (active() || !batch.isEmpty()) { ShistClient.feedback("Проверка уже идёт. Остановить: /sb stop"); return; }
+        var client = MinecraftClient.getInstance();
+        if (client.player == null || client.getNetworkHandler() == null) { ShistClient.feedback("Нужно подключиться к серверу."); return; }
+        try {
+            var file = net.spidiboost.spidiban.NicknameFile.prepare(net.fabricmc.loader.api.FabricLoader.getInstance().getConfigDir(), client.runDirectory.toPath());
+            var names = new java.util.LinkedHashMap<String,String>();
+            for (String line : Files.readString(file, StandardCharsets.UTF_8).split("\\R")) {
+                if (line.stripLeading().startsWith("#")) continue;
+                for (String name : line.trim().split("[,;\\s]+")) if (ShistEngine.validName(name)) names.putIfAbsent(name.toLowerCase(java.util.Locale.ROOT), name);
+            }
+            if (names.isEmpty()) { ShistClient.feedback("В текстовике /sb нет ников."); return; }
+            batchAccepted.clear(); batchRun=true;
+            batch.addAll(names.values()); batchMode=mode; batchCount=count;
+            start(batch.removeFirst(), mode, count, true);
+        } catch (IOException error) { ShistClient.feedback("Не удалось прочитать текстовик /sb: " + error.getMessage()); }
+    }
     private ShistSession() { }
 
     public static void init() {
@@ -80,6 +102,7 @@ public final class ShistSession {
         }
     }
     public static void control(String action, int speed) {
+        if (action.equals("cancel")) { batch.clear(); batchRun=false; }
         switch (action) {
             case "status" -> ShistClient.feedback(engine.status());
             case "cancel" -> { engine.abort("Сбор остановлен. Подтверждённые решения сохранены в журнале."); flush(); }
@@ -88,7 +111,7 @@ public final class ShistSession {
             default -> throw new IllegalArgumentException(action);
         }
     }
-    public static boolean active() { return engine!=null&&engine.active(); }
+    public static boolean active() { return engine!=null&&(engine.active()||!batch.isEmpty()); }
     public static void stop() {
         if(active())control("cancel",0);
     }
@@ -100,6 +123,10 @@ public final class ShistSession {
         debug("CHAT CLEARED rendered messages only; command history/results retained");
     }
     private static void tick(MinecraftClient client) {
+        if (!engine.active() && !batch.isEmpty()) {
+            if (client.player == null || client.getNetworkHandler() != connection) { batch.clear(); batchRun=false; }
+            else start(batch.removeFirst(), batchMode, batchCount, true);
+        }
         if (engine.active()) {
             if (client.getNetworkHandler() != connection || client.player == null) {
                 engine.abort("Соединение изменилось. Непроверенные ники: /sb shist retry после подключения.");
@@ -140,8 +167,10 @@ public final class ShistSession {
                 StandardOpenOption.CREATE, StandardOpenOption.APPEND)) { writer.write(value); }
     }
     private static void finish(ShistEngine.Result result, boolean copy) {
+        if (!copy) { batch.clear(); batchRun=false; }
         clearPendingChat();
-        String names = String.join(" ", result.accepted());
+        if (batchRun) batchAccepted.addAll(result.accepted());
+        String names = String.join(" ", batchRun ? batchAccepted : result.accepted());
         Path destination = run;
         flush();
         IO.execute(() -> {
@@ -157,7 +186,8 @@ public final class ShistSession {
                 Files.writeString(destination.resolve("checks.tsv"), report.toString(), StandardCharsets.UTF_8);
             } catch (IOException error) { logError = error; }
         });
-        if (!copy) return;
+        if (!copy || (batchRun && !batch.isEmpty())) return;
+        batchRun=false;
         try {
             MinecraftClient.getInstance().keyboard.setClipboard(names);
             boolean copied = names.equals(MinecraftClient.getInstance().keyboard.getClipboard());
@@ -166,7 +196,7 @@ public final class ShistSession {
             String suffix = result.unresolved().isEmpty() ? "" : " Непроверенных: " + result.unresolved().size() + "; /sb shist retry.";
             if (result.historyIncomplete()) suffix += " История короче лимита: " + result.entries() + "/" + result.expected() + ".";
             if (!result.unclearHistory().isEmpty()) suffix += " Записей без однозначного статуса: " + result.unclearHistory().size() + "; смотри history-unresolved.txt.";
-            ShistClient.feedback("В буфере " + result.accepted().size() + " подтверждённых ников." + suffix);
+            ShistClient.feedback("В буфере " + (names.isEmpty()?0:names.split(" ").length) + " подтверждённых ников." + suffix);
         } catch (Exception error) {
             debug("CLIPBOARD ERROR " + error);
             ShistClient.feedback("Результат сохранён в " + destination.resolve("result.txt") + "; ошибка буфера: " + error.getMessage());

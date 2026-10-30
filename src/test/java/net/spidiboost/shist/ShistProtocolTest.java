@@ -13,6 +13,10 @@ public final class ShistProtocolTest {
     private static int tests;
     public static void main(String[] args) throws Exception {
         test("optional count and all aliases", () -> {
+            for (String alias : List.of("sb","spidiban","spidiboost")) for (String mode : List.of("ban","mute")) {
+                var all=ShistCommand.parse("/"+alias+" shist all "+mode+" 1000");
+                eq(all.nickname(),"all"); eq(all.mode(),mode); eq(all.count(),1000);
+            }
             for (String alias : List.of("sb", "spidiban", "spidiboost", "SB")) {
                 eq(ShistCommand.parse("/"+alias+" shist SpidiBoost BAN").count(), null);
                 eq(ShistCommand.parse("/"+alias+" shist SpidiBoost mute 10000").count(), 10000);

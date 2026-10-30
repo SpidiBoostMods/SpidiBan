@@ -15,21 +15,38 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /** Each mod bundles its own relocated copy. ObjectShare elects one process-wide coordinator. */
 public final class SharedUpdater {
     public static final String OWNER="spidiboost:update-coordinator-v1";
+    public static final String RESERVATION="spidiboost:update-reservation-v2";
     private static final Logger LOG=LoggerFactory.getLogger("SpidiBoost-updater");
     private final ExecutorService worker=Executors.newSingleThreadExecutor(r->{var t=new Thread(r,"SpidiBoost-updates");t.setDaemon(true);return t;});
     private final ExecutorService downloads=Executors.newFixedThreadPool(4,r->{var t=new Thread(r,"SpidiBoost-download");t.setDaemon(true);return t;});
-    private final AtomicBoolean checking=new AtomicBoolean();private volatile boolean pending;
+    private final AtomicBoolean checking=new AtomicBoolean(),restartQueued=new AtomicBoolean();private volatile boolean pending,canRestart;
     private final GitHubDownload http=new GitHubDownload();
     private final Map<String,UpdateRow> rows=new ConcurrentHashMap<>();
     private record Installed(ModCatalog mod,String version,Path jar){}
     public static void preserve(String id,Runnable save){FabricLoader.getInstance().getObjectShare().put("spidiboost:update-save-"+id,save);}
-    public static boolean claim(net.fabricmc.loader.api.ObjectShare share,Runnable owner){return share.putIfAbsent(OWNER,owner)==null;}
+    public static boolean claim(net.fabricmc.loader.api.ObjectShare share,Runnable owner){
+        Object reservation=share.get(RESERVATION);
+        if(reservation instanceof List<?> list&&list.size()==2&&share.get(OWNER)==list.getFirst()&&list.get(1) instanceof java.util.concurrent.atomic.AtomicReference<?> gate){
+            @SuppressWarnings("unchecked") var typed=(java.util.concurrent.atomic.AtomicReference<Runnable>)gate;return typed.compareAndSet(null,owner);
+        }
+        return share.putIfAbsent(OWNER,owner)==null;
+    }
+    public static void requestCheck(){Object r=FabricLoader.getInstance().getObjectShare().get(OWNER);if(r instanceof Runnable run)run.run();}
+    public static void preferenceChanged(){Object r=FabricLoader.getInstance().getObjectShare().get("spidiboost:update-restart-v2");if(r instanceof Runnable run)run.run();}
+    public static Map<String,String> status(String id){
+        Object value=FabricLoader.getInstance().getObjectShare().get("spidiboost:update-status-v2:"+id);
+        var result=new LinkedHashMap<String,String>();if(value instanceof Map<?,?> m)m.forEach((k,v)->{if(k instanceof String a&&v instanceof String b)result.put(a,b);});return Map.copyOf(result);
+    }
     public static void initialize() {
         var loader=FabricLoader.getInstance();
         // Runnable is a JDK interface: relocated packages and mod loading order cannot break election.
         var updater=new SharedUpdater();
         if(!claim(loader.getObjectShare(),()->updater.check(false))){updater.worker.shutdown();updater.downloads.shutdown();return;}
-        if(loader.isDevelopmentEnvironment()){updater.worker.shutdown();updater.downloads.shutdown();return;}
+        loader.getObjectShare().put("spidiboost:update-restart-v2",(Runnable)()->MinecraftClient.getInstance().execute(updater::scheduleRestart));
+        if(loader.isDevelopmentEnvironment()){
+            for(var spec:ModCatalog.ALL)loader.getModContainer(spec.id()).ifPresent(m->updater.publish(spec.id(),m.getMetadata().getVersion().getFriendlyString(),"","development","Проверка GitHub отключена в тестовом окружении"));
+            updater.worker.shutdown();updater.downloads.shutdown();return;
+        }
         ClientLifecycleEvents.CLIENT_STARTED.register(c->updater.check(true));
         ClientPlayConnectionEvents.JOIN.register((h,s,c)->updater.check(false));
     }
@@ -38,16 +55,32 @@ public final class SharedUpdater {
         for(var spec:ModCatalog.ALL) {
             var found=loader.getModContainer(spec.id());if(found.isEmpty())continue;var mod=found.get();String version=mod.getMetadata().getVersion().getFriendlyString();
             rows.put(spec.id(),new UpdateRow(spec.id(),spec.name(),version,"Проверяем обновление…"));
+            publish(spec.id(),version,"","checking","Проверяем GitHub…");
             var paths=mod.getOrigin().getPaths();Path jar=null;
             if(paths.size()==1){Path p=paths.getFirst();if(!Files.isSymbolicLink(p)&&Files.isRegularFile(p)&&p.getFileName().toString().endsWith(".jar")){Path real=p.toRealPath();if(real.getParent().equals(game.resolve("mods").toRealPath()))jar=real;}}
-            if(jar==null)rows.put(spec.id(),new UpdateRow(spec.id(),spec.name(),version,"Внешний или вложенный JAR: обновление вручную"));
+            if(jar==null){rows.put(spec.id(),new UpdateRow(spec.id(),spec.name(),version,"Внешний или вложенный JAR: обновление вручную"));publish(spec.id(),version,"","external","JAR не в mods этого инстанса: обновление вручную");}
             else list.add(new Installed(spec,version,jar));
         }return list;
     }
     public List<UpdateRow> snapshot(){return ModCatalog.ALL.stream().map(m->rows.get(m.id())).filter(Objects::nonNull).toList();}
     private void state(Installed m,String v,String status){rows.put(m.mod().id(),new UpdateRow(m.mod().id(),m.mod().name(),v,status));}
+    private void publish(String id,String installed,String latest,String state,String text){FabricLoader.getInstance().getObjectShare().put("spidiboost:update-status-v2:"+id,Map.of("installed",installed,"latest",latest,"state",state,"status",text));}
+    private void scheduleRestart(){
+        Path game=FabricLoader.getInstance().getGameDir();
+        if(!pending||!canRestart||!RestartPolicy.enabled(game)||!restartQueued.compareAndSet(false,true))return;
+        var client=MinecraftClient.getInstance();
+        client.setScreen(new UpdateScreen(this::snapshot,"Обновление готово · перезапуск через 4 секунды","/6ubaafp update off — не перезапускать автоматически",true,client.currentScreen));
+        CompletableFuture.delayedExecutor(4,TimeUnit.SECONDS).execute(()->client.execute(()->{
+            restartQueued.set(false);
+            if(!pending||!RestartPolicy.enabled(game)){
+                if(client.currentScreen instanceof UpdateScreen screen)screen.cancelRestart();return;
+            }
+            for(var spec:ModCatalog.ALL){Object hook=FabricLoader.getInstance().getObjectShare().get("spidiboost:update-save-"+spec.id());if(hook instanceof Runnable r)try{r.run();}catch(RuntimeException e){LOG.warn("Could not preserve {} results ({})",spec.name(),e.getClass().getSimpleName());}}
+            client.scheduleStop();
+        }));
+    }
     private void check(boolean startup) {
-        if(pending||!checking.compareAndSet(false,true))return;
+        if(worker.isShutdown()||pending||!checking.compareAndSet(false,true))return;
         worker.execute(()->{
             var changes=new ArrayList<BatchPlan.Change>();Process helper=null;
             try {
@@ -77,14 +110,16 @@ public final class SharedUpdater {
                 try(var pipe=helper.getOutputStream()){plan.write(pipe);}Process waiting=helper;
                 var ready=CompletableFuture.supplyAsync(()->{try{return new BufferedReader(new InputStreamReader(waiting.getInputStream(),StandardCharsets.UTF_8)).readLine();}catch(IOException e){throw new CompletionException(e);}});
                 if(!"READY".equals(ready.get(15,TimeUnit.SECONDS)))throw new IOException("Updater helper did not become ready");
-                pending=true;boolean auto=!restart.isEmpty();
+                pending=true;canRestart=!restart.isEmpty();
                 client.execute(()-> {
-                    if(auto)for(var spec:ModCatalog.ALL){Object hook=FabricLoader.getInstance().getObjectShare().get("spidiboost:update-save-"+spec.id());if(hook instanceof Runnable r)try{r.run();}catch(RuntimeException e){LOG.warn("Could not preserve {} results ({})",spec.name(),e.getClass().getSimpleName());}}
-                    client.setScreen(new UpdateScreen(this::snapshot,auto?"Обновления проверены. Перезапускаем Minecraft…":"Обновления готовы. Перезапустите Minecraft через лаунчер.",auto?"Результаты проверки сохранены":"Файлы установятся после обычного выхода из игры",auto,client.currentScreen));
-                    if(auto)CompletableFuture.delayedExecutor(4,TimeUnit.SECONDS).execute(()->client.execute(client::scheduleStop));
+                    if(canRestart&&RestartPolicy.enabled(game))scheduleRestart();
+                    else if(startup)client.setScreen(new UpdateScreen(this::snapshot,"Обновления загружены · игра продолжит работать","Файлы в mods обновятся после обычного выхода",false,client.currentScreen));
                 });
                 changes.clear();helper=null;
             }catch(Exception e){LOG.debug("Update check failed ({})",e.getClass().getSimpleName());
+                for(var c:changes)for(var mod:ModCatalog.ALL)if(c.destination().getFileName().toString().startsWith(mod.name()+"-")){
+                    var old=status(mod.id());rows.put(mod.id(),new UpdateRow(mod.id(),mod.name(),old.getOrDefault("installed",""),"Установка отложена"));publish(mod.id(),old.getOrDefault("installed",""),old.getOrDefault("latest",""),"unavailable","Установка отложена; повторим проверку при следующем входе");
+                }
                 MinecraftClient.getInstance().execute(()->{if(MinecraftClient.getInstance().currentScreen instanceof UpdateScreen)MinecraftClient.getInstance().setScreen(new UpdateScreen(this::snapshot,"Обновление отложено. Игра продолжит работать.","Повторим проверку при следующем входе на сервер",false,null));});
             }
             finally{if(helper!=null)helper.destroyForcibly();for(var c:changes)try{Files.deleteIfExists(c.staged());}catch(IOException ignored){}checking.set(false);}
@@ -94,20 +129,21 @@ public final class SharedUpdater {
         Path staged=null;
         try {
             var release=Release.parse(m.mod(),new String(http.get(m.mod().latest(),16384),StandardCharsets.UTF_8));
+            publish(m.mod().id(),m.version(),release.version(),release.newerThan(m.version())?"available":"current",release.newerThan(m.version())?"Новая версия найдена; загружаем…":"Новой версии нет");
             if(!release.newerThan(m.version())) {
                 // Older updaters replaced a JAR in place, keeping its previous version in the filename.
                 if(m.version().matches("[0-9]+\\.[0-9]+\\.[0-9]+")&&!m.jar().getFileName().toString().equals(m.mod().artifact(m.version()))) {
                     String same=BatchInstall.hash(m.jar());var local=new Release(m.mod(),m.version(),m.mod().artifact(m.version()),same);
                     staged=Files.createTempFile(dir,"rename-",".jar");Files.copy(m.jar(),staged,StandardCopyOption.REPLACE_EXISTING);Artifact.validate(staged,local);
-                    var rename=new BatchPlan.Change(m.jar(),game.resolve("mods").resolve(local.artifact()),staged,same,same);state(m,m.version(),"Имя JAR приведено к установленной версии");staged=null;return rename;
+                    var rename=new BatchPlan.Change(m.jar(),game.resolve("mods").resolve(local.artifact()),staged,same,same);state(m,m.version(),"Имя JAR приведено к установленной версии");publish(m.mod().id(),m.version(),release.version(),"staged","Имя JAR исправится после выхода");staged=null;return rename;
                 }
                 state(m,m.version(),"Установлена актуальная версия");return null;
             }
             state(m,m.version()+" → "+release.version(),"Загружаем обновление…");String old=BatchInstall.hash(m.jar());
             staged=Files.createTempFile(dir,"release-",".jar");Files.write(staged,http.get(release.download(),32*1024*1024));Artifact.validate(staged,release);
             Path destination=game.resolve("mods").resolve(release.artifact());
-            var c=new BatchPlan.Change(m.jar(),destination,staged,old,release.sha256());state(m,release.version(),"Обновление проверено ✓");staged=null;return c;
-        }catch(Exception e){state(m,m.version(),"Проверка недоступна. Текущая версия сохранена");LOG.debug("{} update failed ({})",m.mod().name(),e.getClass().getSimpleName());return null;}
+            var c=new BatchPlan.Change(m.jar(),destination,staged,old,release.sha256());state(m,release.version(),"Обновление проверено ✓");publish(m.mod().id(),m.version(),release.version(),"staged","Загружено и проверено; установится после выхода");staged=null;return c;
+        }catch(Exception e){state(m,m.version(),"Проверка недоступна. Текущая версия сохранена");publish(m.mod().id(),m.version(),"","unavailable","GitHub недоступен; текущая версия сохранена");LOG.debug("{} update failed ({})",m.mod().name(),e.getClass().getSimpleName());return null;}
         finally{if(staged!=null)try{Files.deleteIfExists(staged);}catch(IOException ignored){}}
     }
     private static Path extractAgent(Path directory)throws IOException {

@@ -42,6 +42,10 @@ public final class NativeShistProbe implements ClientModInitializer {
             require(Arrays.stream(net.minecraft.client.network.ClientPlayNetworkHandler.class.getDeclaredMethods()).anyMatch(m->m.getName().contains("spidiban$game")),"packet mixin not applied");
             var dispatcher=new CommandDispatcher<FabricClientCommandSource>();SpidiBanClient.registerCommands(dispatcher);ShistClient.registerCommands(dispatcher);
             for(String alias:List.of("sb","spidiban","spidiboost")){
+                for(String mode:List.of("ban","mute")) {
+                    var parsed=dispatcher.parse(alias+" shist all "+mode+" 1000",null);
+                    require(!parsed.getReader().canRead()&&parsed.getContext().getCommand()!=null,"all command registration failed");
+                }
                 var suggestions=dispatcher.getCompletionSuggestions(dispatcher.parse(alias+" ",null)).get().getList().stream().map(s->s.getText()).toList();
                 require(suggestions.containsAll(List.of("accept","cheats","delay","stop","shist")),"root commands/TAB changed");
             }
