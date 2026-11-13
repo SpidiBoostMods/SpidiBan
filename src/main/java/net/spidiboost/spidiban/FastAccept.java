@@ -103,7 +103,7 @@ final class FastAccept {
             case ARMED -> {
                 if (!primed) { timeout(now, "нет запроса на подтверждение FP_RW"); return; }
                 if (hasBan && now - lastBan < interval) return;
-                if (!issueButton(menu)) {
+                if (!confirmButton(menu)) {
                     if (now - since >= TIMEOUT && (!hasBan || now - lastBan - interval >= TIMEOUT))
                         stop("кнопка подтверждения FP_RW не появилась");
                     return;
@@ -113,7 +113,7 @@ final class FastAccept {
                 menu.click(26);
             }
             case RESULT -> {
-                if (renewed && issueButton(menu)) {
+                if (renewed && confirmButton(menu)) {
                     renewed = false;
                     retried = true;
                     since = now;
@@ -124,8 +124,14 @@ final class FastAccept {
     }
 
     private boolean issueButton(Menu menu) {
-        return (menu.button(26, "ВЫДАТЬ БАН") || menu.button(26, "ПОДТВЕРДИТЬ") || menu.button(26, "ПОДТВЕРДИТЬ БАН")) && (menu.id() == issueMenu
+        return menu.button(26, "ВЫДАТЬ БАН") && (menu.id() == issueMenu
                 || (primed && !issueTitle.isBlank() && issueTitle.equals(menu.title())));
+    }
+
+    private boolean confirmButton(Menu menu) {
+        return menu.button(26, "ПОДТВЕРДИТЕ")
+                || menu.button(26, "ПОДТВЕРДИТЬ")
+                || menu.button(26, "ПОДТВЕРДИТЬ БАН");
     }
     private void change(Step next, long at) { step = next; since = at; }
     private void timeout(long now, String reason) { if (now - since >= TIMEOUT) stop(reason); }

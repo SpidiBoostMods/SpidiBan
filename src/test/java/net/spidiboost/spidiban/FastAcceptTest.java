@@ -19,7 +19,11 @@ class FastAcceptTest {
         final List<Long> clicks = new ArrayList<>();
         public int id() { return id; }
         public boolean root() { return slot == 15; }
-        public boolean button(int n, String name) { return n == slot; }
+        public boolean button(int n, String name) {
+            if (n != slot) return false;
+            if (n == 26 && slot == 26) return name.equals("ВЫДАТЬ БАН") || name.equals("ПОДТВЕРДИТЕ");
+            return true;
+        }
         public String staff() { return "SpidiBoost"; }
         public void click(int n) { assertEquals(slot,n); if (n == 26) clicks.add(now); }
         public void send(String cmd) { commands.add(cmd); }
@@ -73,7 +77,7 @@ class FastAcceptTest {
         assertEquals(3,r.clicks.size());r.now++;r.tick();assertEquals(4,r.clicks.size());
     }
     @Test void noFinalClickInReplacedMenu() {
-        var r=new Rig();r.first();r.prepare();r.reply(PROMPT);r.id++;r.title="Другой игрок";r.now+=DELAY+12_000_000_000L;r.tick();
+        var r=new Rig();r.first();r.prepare();r.reply(PROMPT);r.id++;r.title="Другой игрок";r.slot=0;r.now+=DELAY+12_000_000_000L;r.tick();
         assertNotNull(r.engine.error());assertEquals(3,r.clicks.size());
     }
     @Test void classicWaitsOnlyAfterConfirmedSuccess() {
