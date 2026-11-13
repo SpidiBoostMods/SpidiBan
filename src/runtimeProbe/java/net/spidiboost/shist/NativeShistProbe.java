@@ -69,10 +69,15 @@ public final class NativeShistProbe implements ClientModInitializer {
             var fastStart=net.spidiboost.spidiban.SpidiBanAutomation.class;
             var route=Class.forName(fastStart.getName()+"$Route");
             var start=fastStart.getDeclaredMethod("start",String.class,route);start.setAccessible(true);
-            start.invoke(null,"First Second",route.getEnumConstants()[0]);
+            for (int mode : List.of(1,2)) {
+                dispatcher.execute("sb accept mode",null);
+                start.invoke(null,"First Second",route.getEnumConstants()[0]);
+                var observing=fastStart.getDeclaredMethod("observing");observing.setAccessible(true);
+                require((boolean)observing.invoke(null),"mode "+mode+" did not subscribe to ban evidence");
             require(net.spidiboost.spidiban.SpidiBanAutomation.isActive(),"fast queue inactive");
             keyboard.invoke(client.keyboard,client.getWindow().getHandle(),256,0,1,0);
             require(!net.spidiboost.spidiban.SpidiBanAutomation.isActive(),"Esc left fast queue active");
+            }
             evidence.add("PASS accept mode via all aliases, persisted settings and Minecraft Keyboard Esc stops queue");
             var automation=net.spidiboost.spidiban.SpidiBanAutomation.class;
             var state=automation.getDeclaredField("state");state.setAccessible(true);

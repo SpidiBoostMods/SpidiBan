@@ -75,8 +75,8 @@ public final class SpidiBanAutomation {
             return 0;
         }
         PENDING.clear();
-        if (requestedRoute == Route.FUNPAY && acceptMode == 2) {
-            fast = new FastAccept(parsed);
+        if (requestedRoute == Route.FUNPAY) {
+            fast = new FastAccept(parsed, acceptMode == 2);
             inbox.start();
             SpidiBanClient.feedback("FP_RW: в очереди " + parsed.size() + ". Задержка: " + delayDescription() + ".");
             return parsed.size();
@@ -148,22 +148,18 @@ public final class SpidiBanAutomation {
 
         if (state == State.WAITING_FOR_ROOT) {
             if (handler.syncId != handlerBeforeCommand && isRootMenu(screen, handler)) {
-                int slot = route == Route.FUNPAY ? 15 : 13;
-                String name = route == Route.FUNPAY ? "FUNPAY" : "ЧИТЫ И МОДЫ";
-                if (hasExactName(handler, slot, name)) {
-                    click(client, handler, slot);
+                if (hasExactName(handler, 13, "ЧИТЫ И МОДЫ")) {
+                    click(client, handler, 13);
                     state = State.WAITING_FOR_REASON;
                     stateStartedAt = ticks;
-                } else if (timedOut()) fail("не найден пункт " + name);
+                } else if (timedOut()) fail("не найден пункт ЧИТЫ И МОДЫ");
             } else if (timedOut()) retryOrFail(client);
         } else if (state == State.WAITING_FOR_REASON) {
-            int slot = route == Route.FUNPAY ? 1 : 0;
-            String name = route == Route.FUNPAY ? "FP_RW" : "Читы";
-            if (hasExactName(handler, slot, name)) {
-                click(client, handler, slot);
-                state = route == Route.FUNPAY ? State.WAITING_FOR_ISSUE : State.WAITING_FOR_SILENT_BAN;
+            if (hasExactName(handler, 0, "Читы")) {
+                click(client, handler, 0);
+                state = State.WAITING_FOR_SILENT_BAN;
                 stateStartedAt = ticks;
-            } else if (timedOut()) fail("не найден пункт " + name);
+            } else if (timedOut()) fail("не найден пункт Читы");
         } else if (state == State.WAITING_FOR_SILENT_BAN) {
             // Both controls share this window. Their names are verified before
             // the requested rapid sequence is sent to the server.
@@ -174,13 +170,6 @@ public final class SpidiBanAutomation {
                 state = State.WAITING_FOR_CLOSE;
                 stateStartedAt = ticks;
             } else if (timedOut()) fail("не найдены Тихий бан: выкл или ВЫДАТЬ БАН");
-        } else if (state == State.WAITING_FOR_ISSUE) {
-            if (hasExactName(handler, 26, "ВЫДАТЬ БАН")) {
-                click(client, handler, 26);
-                click(client, handler, 26);
-                state = State.WAITING_FOR_CLOSE;
-                stateStartedAt = ticks;
-            } else if (timedOut()) fail("не найдена кнопка ВЫДАТЬ БАН");
         }
     }
 
@@ -192,6 +181,7 @@ public final class SpidiBanAutomation {
 
     private record ClientMenu(MinecraftClient client) implements FastAccept.Menu {
         public int id() { return client.currentScreen instanceof HandledScreen<?> scr ? scr.getScreenHandler().syncId : -1; }
+        public String title() { return client.currentScreen instanceof HandledScreen<?> scr ? scr.getTitle().getString() : ""; }
         public boolean root() {
             return client.currentScreen instanceof HandledScreen<?> scr && isRootMenu(scr, scr.getScreenHandler());
         }
@@ -219,7 +209,7 @@ public final class SpidiBanAutomation {
     }
 
     public static boolean shouldLockControls() {
-        if (fast != null) return true;
+        if (fast != null) return fast.lockControls(System.nanoTime(), Math.round(delaySeconds * 1_000_000_000L));
         if (state == State.IDLE) return false;
         if (state != State.WAITING_TO_SEND) return true;
         if (PENDING.isEmpty()) return false;
@@ -405,6 +395,6 @@ public final class SpidiBanAutomation {
     }
 
     private enum State {
-        IDLE, WAITING_TO_SEND, WAITING_FOR_ROOT, WAITING_FOR_REASON, WAITING_FOR_SILENT_BAN, WAITING_FOR_ISSUE, WAITING_FOR_CLOSE
+        IDLE, WAITING_TO_SEND, WAITING_FOR_ROOT, WAITING_FOR_REASON, WAITING_FOR_SILENT_BAN, WAITING_FOR_CLOSE
     }
 }

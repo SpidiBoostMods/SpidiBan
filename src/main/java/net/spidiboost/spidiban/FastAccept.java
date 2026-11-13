@@ -7,6 +7,7 @@ final class FastAccept {
     interface Menu {
         int id();
         boolean root();
+        String title();
         boolean button(int slot, String name);
         void click(int slot);
         void send(String command);
@@ -16,6 +17,8 @@ final class FastAccept {
     private enum Step { NEXT, ROOT, REASON, ISSUE, ARMED, RESULT }
     private static final long TIMEOUT = 12_000_000_000L;
     private final ArrayDeque<String> queue;
+    private final boolean prepareEarly;
+    private String issueTitle;
     private Step step = Step.NEXT;
     private String nick;
     private int before, issueMenu, retries;
@@ -23,11 +26,17 @@ final class FastAccept {
     private boolean hasBan, primed, renewed, retried;
     private String error;
 
-    FastAccept(Collection<String> names) { queue = new ArrayDeque<>(names); }
+    FastAccept(Collection<String> names, boolean prepareEarly) {
+        queue = new ArrayDeque<>(names);
+        this.prepareEarly = prepareEarly;
+    }
 
     boolean done() { return queue.isEmpty() && nick == null; }
     String error() { return error; }
     int remaining() { return queue.size() + (nick == null ? 0 : 1); }
+    boolean lockControls(long now, long interval) {
+        return prepareEarly || step != Step.NEXT || !hasBan || now - lastBan >= interval - 500_000_000L;
+    }
     boolean ownsMenu(int id) { return id >= 0 && step != Step.NEXT && id != before; }
 
     void accept(BanInbox.Delivery delivery, Menu menu) {
@@ -43,12 +52,12 @@ final class FastAccept {
             case CONFIRM -> {
                 if (step == Step.ARMED) primed = true;
                 else if (step == Step.RESULT && at - finalClick >= 0 && !retried) {
-                    if (primed) renewed = true;
-                    primed = true;
+                    renewed = true;
                 }
                 return;
             }
             case MISSING -> { if (step != Step.ROOT) return; }
+            case COOLDOWN -> { if (step != Step.RESULT && step != Step.ROOT) return; }
             case ALREADY_BANNED -> { }
         }
         nick = null;
@@ -59,6 +68,7 @@ final class FastAccept {
         if (error != null || done()) return;
         switch (step) {
             case NEXT -> {
+                if (!prepareEarly && hasBan && now - lastBan < interval) return;
                 nick = queue.removeFirst();
                 before = menu.id();
                 retries = 0;
@@ -84,14 +94,20 @@ final class FastAccept {
             case ISSUE -> {
                 if (menu.button(26, "ВЫДАТЬ БАН")) {
                     issueMenu = menu.id();
+                    issueTitle = menu.title();
                     primed = renewed = retried = false;
                     change(Step.ARMED, now);
                     menu.click(26);
                 } else timeout(now, "не найдена кнопка выдачи");
             }
             case ARMED -> {
-                if (!issueButton(menu)) { stop("окно подтверждения изменилось"); return; }
+                if (!primed) { timeout(now, "нет запроса на подтверждение FP_RW"); return; }
                 if (hasBan && now - lastBan < interval) return;
+                if (!issueButton(menu)) {
+                    if (now - since >= TIMEOUT && (!hasBan || now - lastBan - interval >= TIMEOUT))
+                        stop("кнопка подтверждения FP_RW не появилась");
+                    return;
+                }
                 finalClick = now;
                 change(Step.RESULT, now);
                 menu.click(26);
@@ -107,7 +123,10 @@ final class FastAccept {
         }
     }
 
-    private boolean issueButton(Menu menu) { return menu.id() == issueMenu && menu.button(26, "ВЫДАТЬ БАН"); }
+    private boolean issueButton(Menu menu) {
+        return (menu.button(26, "ВЫДАТЬ БАН") || menu.button(26, "ПОДТВЕРДИТЬ") || menu.button(26, "ПОДТВЕРДИТЬ БАН")) && (menu.id() == issueMenu
+                || (primed && !issueTitle.isBlank() && issueTitle.equals(menu.title())));
+    }
     private void change(Step next, long at) { step = next; since = at; }
     private void timeout(long now, String reason) { if (now - since >= TIMEOUT) stop(reason); }
     private void stop(String reason) { error = nick + ": " + reason; }
