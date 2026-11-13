@@ -57,6 +57,23 @@ public final class NativeShistProbe implements ClientModInitializer {
                 if(phase.equals("checks"))require(test.partial.accepted().equals(List.of("QA0"))&&test.partial.unresolved().equals(List.of("QA1")),"stop lost partial decisions");
             }
             evidence.add("PASS all three aliases: Brigadier + uppercase/slash fallback stop history/checks, preserve partial results, zero sends after stop");
+            var cfg=client.runDirectory.toPath().resolve("config/sbb.cfg");
+            for(String alias:List.of("sb","spidiban","spidiboost")){
+                require(dispatcher.execute(alias+" accept mode",null)==1,"mode dispatcher");
+                require(Files.readString(cfg).contains("acceptMode=1"),"mode 1 not persisted");
+                require(SpidiBanClient.tryHandleInput("/"+alias+" accept mode"),"mode fallback");
+                require(Files.readString(cfg).contains("acceptMode=2"),"mode 2 not persisted");
+            }
+            var keyboard=net.minecraft.client.Keyboard.class.getDeclaredMethod("onKey",long.class,int.class,int.class,int.class,int.class);
+            keyboard.setAccessible(true);
+            var fastStart=net.spidiboost.spidiban.SpidiBanAutomation.class;
+            var route=Class.forName(fastStart.getName()+"$Route");
+            var start=fastStart.getDeclaredMethod("start",String.class,route);start.setAccessible(true);
+            start.invoke(null,"First Second",route.getEnumConstants()[0]);
+            require(net.spidiboost.spidiban.SpidiBanAutomation.isActive(),"fast queue inactive");
+            keyboard.invoke(client.keyboard,client.getWindow().getHandle(),256,0,1,0);
+            require(!net.spidiboost.spidiban.SpidiBanAutomation.isActive(),"Esc left fast queue active");
+            evidence.add("PASS accept mode via all aliases, persisted settings and Minecraft Keyboard Esc stops queue");
             var automation=net.spidiboost.spidiban.SpidiBanAutomation.class;
             var state=automation.getDeclaredField("state");state.setAccessible(true);
             var queue=automation.getDeclaredField("PENDING");queue.setAccessible(true);

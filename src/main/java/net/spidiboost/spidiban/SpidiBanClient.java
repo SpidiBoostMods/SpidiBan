@@ -27,6 +27,9 @@ public final class SpidiBanClient implements ClientModInitializer {
     @Override
     public void onInitializeClient() {
         ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> registerCommands(dispatcher));
+        net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
+            if (SpidiBanAutomation.isActive()) SpidiBanAutomation.cancel();
+        });
         ClientTickEvents.END_CLIENT_TICK.register(SpidiBanAutomation::tick);
         net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents.CLIENT_STOPPING.register(c -> SpidiBanAutomation.cancel());
         ClientReceiveMessageEvents.GAME.register((message, overlay) ->
@@ -35,23 +38,10 @@ public final class SpidiBanClient implements ClientModInitializer {
                 SpidiBanAutomation.onIncomingMessage(message.getString()));
     }
     public static void registerCommands(com.mojang.brigadier.CommandDispatcher<net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource> dispatcher) {
-            dispatcher.register(ClientCommandManager.literal("sb")
+            for (String alias : new String[]{"sb", "spidiban", "spidiboost"}) dispatcher.register(ClientCommandManager.literal(alias)
                     .executes(context -> openEditor())
-                    .then(ClientCommandManager.literal("accept").executes(context -> accept(SpidiBanAutomation.Route.FUNPAY)))
-                    .then(ClientCommandManager.literal("cheats").executes(context -> accept(SpidiBanAutomation.Route.CHEATS)))
-                    .then(ClientCommandManager.literal("cancel").executes(context -> cancel()))
-                    .then(ClientCommandManager.literal("stop").executes(context -> cancel()))
-                    .then(delayCommand()));
-            dispatcher.register(ClientCommandManager.literal("spidiban")
-                    .executes(context -> openEditor())
-                    .then(ClientCommandManager.literal("accept").executes(context -> accept(SpidiBanAutomation.Route.FUNPAY)))
-                    .then(ClientCommandManager.literal("cheats").executes(context -> accept(SpidiBanAutomation.Route.CHEATS)))
-                    .then(ClientCommandManager.literal("cancel").executes(context -> cancel()))
-                    .then(ClientCommandManager.literal("stop").executes(context -> cancel()))
-                    .then(delayCommand()));
-            dispatcher.register(ClientCommandManager.literal("spidiboost")
-                    .executes(context -> openEditor())
-                    .then(ClientCommandManager.literal("accept").executes(context -> accept(SpidiBanAutomation.Route.FUNPAY)))
+                    .then(ClientCommandManager.literal("accept").executes(context -> accept(SpidiBanAutomation.Route.FUNPAY))
+                            .then(ClientCommandManager.literal("mode").executes(context -> SpidiBanAutomation.toggleMode())))
                     .then(ClientCommandManager.literal("cheats").executes(context -> accept(SpidiBanAutomation.Route.CHEATS)))
                     .then(ClientCommandManager.literal("cancel").executes(context -> cancel()))
                     .then(ClientCommandManager.literal("stop").executes(context -> cancel()))
@@ -109,9 +99,19 @@ public final class SpidiBanClient implements ClientModInitializer {
     }
 
     private static int setDelay(double seconds) {
+        if (!Double.isFinite(seconds) || seconds < 0 || seconds > 3600) {
+            feedback("Задержка должна быть числом от 0 до 3600 секунд.");
+            return 0;
+        }
         SpidiBanAutomation.setDelaySeconds(seconds);
         feedback("Задержка между банами установлена: " + SpidiBanAutomation.delayDescription() + ".");
         return Command.SINGLE_SUCCESS;
+    }
+
+    public static boolean emergencyStop() {
+        if (!SpidiBanAutomation.isActive() && !net.spidiboost.shist.ShistSession.active()) return false;
+        cancel();
+        return true;
     }
 
     private static int cancel() {
@@ -136,6 +136,7 @@ public final class SpidiBanClient implements ClientModInitializer {
         }
         String action = parts[1].trim();
         if (action.equalsIgnoreCase("accept")) accept(SpidiBanAutomation.Route.FUNPAY);
+        else if (action.equalsIgnoreCase("accept mode")) SpidiBanAutomation.toggleMode();
         else if (action.equalsIgnoreCase("cheats")) accept(SpidiBanAutomation.Route.CHEATS);
         else if (action.equalsIgnoreCase("cancel") || action.equalsIgnoreCase("stop")) cancel();
         else if (action.equalsIgnoreCase("delay")) showDelay();

@@ -13,7 +13,12 @@ public abstract class KeyboardMixin {
     @Inject(method = "onKey", at = @At("HEAD"), cancellable = true)
     private void spidiban$blockInventoryAndEscape(long window, int key, int scancode, int action,
                                                   int modifiers, CallbackInfo ci) {
+        if (action == GLFW.GLFW_PRESS && key == GLFW.GLFW_KEY_ESCAPE
+                && net.spidiboost.spidiban.SpidiBanClient.emergencyStop()) {
+            ci.cancel();
+            return;
+        }
         if (!SpidiBanAutomation.shouldLockControls() || action == GLFW.GLFW_RELEASE) return;
-        if (key == GLFW.GLFW_KEY_E || key == GLFW.GLFW_KEY_ESCAPE) ci.cancel();
+        if (key == GLFW.GLFW_KEY_E) ci.cancel();
     }
 }

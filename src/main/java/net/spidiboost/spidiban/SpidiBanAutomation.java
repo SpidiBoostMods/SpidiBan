@@ -23,6 +23,10 @@ public final class SpidiBanAutomation {
     private static final String CONFIG_NAME = "sbb.cfg";
     private static final ArrayDeque<String> PENDING = new ArrayDeque<>();
 
+    private static int acceptMode = 2;
+    private static FastAccept fast;
+    private static final BanInbox inbox = new BanInbox();
+
     private static State state = State.IDLE;
     private static Route route;
     private static String activeName;
@@ -51,6 +55,11 @@ public final class SpidiBanAutomation {
     }
 
     static int start(String input, Route requestedRoute) {
+        ensureConfigLoaded(MinecraftClient.getInstance());
+        if (isActive()) {
+            SpidiBanClient.feedback("Очередь уже запущена. Для отмены — Esc.");
+            return 0;
+        }
         Set<String> parsed = new LinkedHashSet<>();
         int rejected = 0;
         for (String line : input.split("\\R")) {
@@ -66,6 +75,12 @@ public final class SpidiBanAutomation {
             return 0;
         }
         PENDING.clear();
+        if (requestedRoute == Route.FUNPAY && acceptMode == 2) {
+            fast = new FastAccept(parsed);
+            inbox.start();
+            SpidiBanClient.feedback("FP_RW: в очереди " + parsed.size() + ". Задержка: " + delayDescription() + ".");
+            return parsed.size();
+        }
         PENDING.addAll(parsed);
         route = requestedRoute;
         state = State.WAITING_TO_SEND;
@@ -82,7 +97,28 @@ public final class SpidiBanAutomation {
     static void tick(MinecraftClient client) {
         ticks++;
         ensureConfigLoaded(client);
-        if (client.player == null) return;
+        if (client.player == null) {
+            if (isActive()) cancel();
+            return;
+        }
+        if (fast != null) {
+            var menu = new ClientMenu(client);
+            if (inbox.overflowed()) {
+                cancel();
+                SpidiBanClient.feedback("Очередь остановлена: слишком много ответов сервера.");
+                return;
+            }
+            for (var delivery = inbox.poll(); delivery != null; delivery = inbox.poll()) {
+                if (delivery.connection() == client.player.networkHandler.getConnection()) fast.accept(delivery, menu);
+            }
+            fast.tick(menu, System.nanoTime(), Math.round(delaySeconds * 1_000_000_000L));
+            if (fast.done() || fast.error() != null) {
+                SpidiBanClient.feedback(fast.error() == null ? "Очередь завершена." : "Остановлено: " + fast.error() + ".");
+                fast = null;
+                inbox.stop();
+            }
+            return;
+        }
         if (state == State.WAITING_TO_SEND) {
             if (ticks >= nextCommandAt) sendNext(client);
             return;
@@ -148,11 +184,42 @@ public final class SpidiBanAutomation {
         }
     }
 
+    static boolean observing() { return inbox.enabled(); }
+
+    public static void captureServerMessage(Object connection, String message) {
+        inbox.capture(connection, message, System.nanoTime());
+    }
+
+    private record ClientMenu(MinecraftClient client) implements FastAccept.Menu {
+        public int id() { return client.currentScreen instanceof HandledScreen<?> scr ? scr.getScreenHandler().syncId : -1; }
+        public boolean root() {
+            return client.currentScreen instanceof HandledScreen<?> scr && isRootMenu(scr, scr.getScreenHandler());
+        }
+        public boolean button(int slot, String name) {
+            return client.currentScreen instanceof HandledScreen<?> scr && scr.getScreenHandler() == client.player.currentScreenHandler
+                    && scr.getScreenHandler().slots.size() > slot && hasExactName(scr.getScreenHandler(), slot, name);
+        }
+        public void click(int slot) { SpidiBanAutomation.click(client, client.player.currentScreenHandler, slot); }
+        public void send(String command) { client.player.networkHandler.sendChatCommand(command); }
+        public String staff() { return client.player.getGameProfile().getName(); }
+    }
+
+    static int toggleMode() {
+        var client = MinecraftClient.getInstance();
+        ensureConfigLoaded(client);
+        acceptMode = 3 - acceptMode;
+        saveConfig(client);
+        SpidiBanClient.feedback(acceptMode == 2 ? "Режим 2: готовить следующий бан во время задержки."
+                : "Режим 1: открывать следующее меню после задержки.");
+        return 1;
+    }
+
     public static boolean isActive() {
-        return state != State.IDLE;
+        return fast != null || state != State.IDLE;
     }
 
     public static boolean shouldLockControls() {
+        if (fast != null) return true;
         if (state == State.IDLE) return false;
         if (state != State.WAITING_TO_SEND) return true;
         if (PENDING.isEmpty()) return false;
@@ -160,12 +227,18 @@ public final class SpidiBanAutomation {
     }
 
     static void cancel() {
-        if (state == State.IDLE) {
+        if (!isActive()) {
             SpidiBanClient.feedback("Очередь не запущена.");
             return;
         }
-        int remaining = PENDING.size() + (activeName == null ? 0 : 1);
+        var client = MinecraftClient.getInstance();
+        if (client.player != null && client.currentScreen instanceof HandledScreen<?> scr &&
+                (fast != null ? fast.ownsMenu(scr.getScreenHandler().syncId) :
+                state != State.WAITING_TO_SEND && scr.getScreenHandler().syncId != handlerBeforeCommand)) client.player.closeHandledScreen();
+        int remaining = fast != null ? fast.remaining() : PENDING.size() + (activeName == null ? 0 : 1);
         PENDING.clear();
+        fast = null;
+        inbox.stop();
         activeName = null;
         cooldownName = null;
         route = null;
@@ -289,6 +362,7 @@ public final class SpidiBanAutomation {
                 for (String line : Files.readString(file, StandardCharsets.UTF_8)
                         .replace("\\n", "\n").split("\\R")) {
                     String trimmed = line.trim();
+                    if (trimmed.startsWith("acceptMode=")) acceptMode = trimmed.substring(11).trim().equals("1") ? 1 : 2;
                     if (trimmed.startsWith("delaySeconds=")) {
                         delaySeconds = Math.max(0.0D, Math.min(MAX_DELAY_SECONDS,
                                 Double.parseDouble(trimmed.substring("delaySeconds=".length()).trim())));
@@ -310,7 +384,7 @@ public final class SpidiBanAutomation {
             Path file = configFile(client);
             Files.createDirectories(file.getParent());
             Files.writeString(file, "# SpidiBan delay between completed bans, in seconds.\n"
-                    + "delaySeconds=" + delaySeconds + "\n", StandardCharsets.UTF_8);
+                    + "delaySeconds=" + delaySeconds + "\nacceptMode=" + acceptMode + "\n", StandardCharsets.UTF_8);
         } catch (IOException exception) {
             SpidiBanClient.LOGGER.warn("Could not save {}", CONFIG_NAME, exception);
         }
