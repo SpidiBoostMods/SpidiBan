@@ -113,6 +113,61 @@ public final class ShistProtocolTest {
         test("mute retains previous rules for aqua and FP reasons", () -> {
             Harness h=new Harness("mute",2);h.entry("A",true);h.entry("B",true);h.beginChecks();h.reply("A","§bFP_RW",true);h.reply("B","fp",true);h.drain();eq(h.result.accepted(),List.of("A","B"));
         });
+        test("excluded history reasons send no checks or retries", () -> {
+            List<String> reasons=List.of("FP_RW","fp_rw","FP RW","fp","ЧСП","Попытка взлома","Пиар читов",
+                    "Некорректный никнейм","nek.nick","§bЛюбая причина","§x§6§6§c§c§f§fЧиты");
+            Harness h=new Harness("ban",reasons.size());
+            for(int i=0;i<reasons.size();i++)h.entry("Skip"+i,true,reasons.get(i));
+            h.beginChecks();h.drain();h.engine.retry();h.advance(30000);
+            eq(h.result.entries(),reasons.size());eq(h.result.candidates(),List.of());eq(h.checkSends(),0);
+            yes(!h.result.historyIncomplete(),"excluded records lost from history count");
+            yes(h.histories.stream().anyMatch(line->line.contains("FP_RW")),"excluded history not retained");
+        });
+        test("history label timestamp and active marker colors do not exclude a gold reason", () -> {
+            Harness h=new Harness("ban",1);
+            h.feed("§b[19:12:15] §6Nick0 был забанен куратором SpidiBoost\n§bПо причине: §6Читы §b[Активный]\n§bОкончание в 1 день");
+            h.beginChecks();h.reply("Nick0","Читы",true);h.drain();eq(h.result.accepted(),List.of("Nick0"));eq(h.sent.get(1),"checkban Nick0");
+        });
+        test("history exclusions apply per record and keep another eligible ban of the same nickname", () -> {
+            for(boolean excludedFirst:List.of(false,true)){
+                Harness h=new Harness("ban",3);
+                h.entry("Same",true,excludedFirst?"FP_RW":"Читы");
+                h.entry("Same",true,excludedFirst?"Читы":"FP_RW");
+                h.entry("OnlySkipped",true,"ЧСП");h.beginChecks();h.reply("Same","Читы",true);h.drain();
+                eq(h.result.entries(),3);eq(h.result.candidates(),List.of("Same"));eq(h.result.accepted(),List.of("Same"));eq(h.checkSends(),1);
+            }
+        });
+        test("mixed punishment types cannot switch checkban and checkmute", () -> {
+            for(String mode:List.of("ban","mute")){
+                Harness h=new Harness(mode,3);
+                h.feed("Wrong был "+(mode.equals("ban")?"заткнут":"забанен")+" куратором SpidiBoost\nПо причине: Читы [Активный]\nОкончание в 1 день");
+                h.entry("Right",true,"Читы");h.entry("Filtered",true,"FP_RW");
+                h.responder=command->{yes(command.startsWith(mode.equals("ban")?"checkban ":"checkmute "),command);h.reply(command.split(" ")[1],"Читы",true);};
+                h.beginChecks();h.drain();
+                eq(h.result.accepted(),mode.equals("ban")?List.of("Right"):List.of("Right","Filtered"));
+                eq(h.result.entries(),3);eq(h.checkSends(),mode.equals("ban")?1:2);
+            }
+        });
+        test("history exclusions do not absorb other fields or accidentally skip ordinary substrings", () -> {
+            for(String reason:List.of("Читы","FunPay","playerok","fps","nick_fp","fp_rw_admin")){
+                Harness h=new Harness("ban",1);h.entry("Nick0",true,reason);h.beginChecks();h.reply("Nick0","Читы",true);h.drain();
+                eq(h.result.accepted(),List.of("Nick0"));eq(h.checkSends(),1);
+            }
+            Harness h=new Harness("ban",1);h.feed("Nick0 был забанен куратором FP_RW\n[Активный]\nОкончание в 1 день");
+            h.beginChecks();h.reply("Nick0","Читы",true);h.drain();eq(h.result.accepted(),List.of("Nick0"));
+        });
+        test("100000 history records prefiltered without losing eligible bans or cleanup", () -> {
+            for(int batch=0;batch<10;batch++){
+                Harness h=new Harness("ban",10000);List<String> expected=new ArrayList<>();
+                for(int i=0;i<10000;i++){
+                    String reason=switch(i%5){case 0->"Читы";case 1->"FP_RW";case 2->"ЧСП";case 3->"§bЛюбая причина";default->"Некорректный никнейм";};
+                    h.entry("Nick"+i,true,reason);if(i%5==0)expected.add("Nick"+i);
+                }
+                h.responder=command->h.reply(command.split(" ")[1],"Читы",true);
+                h.beginChecks();h.drain();eq(h.result.entries(),10000);eq(h.result.candidates(),expected);eq(h.result.accepted(),expected);
+                eq(h.checkSends(),2000);eq(h.clears,600);eq(h.result.unresolved(),List.of());
+            }
+        });
         test("chat cleanup every 20 history entries and check answers retains results", () -> {
             for(String mode:List.of("ban","mute"))for(int size:new int[]{19,20,21,40,41}){
                 Harness h=new Harness(mode,size);for(int i=0;i<size;i++)h.entry("Nick"+i,true);
@@ -447,7 +502,10 @@ public final class ShistProtocolTest {
         Harness(String mode,int count) { this.mode=mode; engine.start("SpidiBoost",mode,count); feed("История персонала SpidiBoost (Лимит: "+count+"):"); }
         void feed(String raw) { engine.accept(raw); }
         void entry(String nick,boolean active) {
-            feed("-- [2026-09-23 14:52] --\n"+nick+" был "+(mode.equals("ban")?"забанен":"заткнут")+" куратором SpidiBoost\nПо причине: Читы ["+(active?"Активный":"Истек")+"]\nОкончание в 49 дней.");
+            entry(nick,active,"Читы");
+        }
+        void entry(String nick,boolean active,String reason) {
+            feed("-- [2026-09-23 14:52] --\n"+nick+" был "+(mode.equals("ban")?"забанен":"заткнут")+" куратором SpidiBoost\nПо причине: "+reason+" ["+(active?"Активный":"Истек")+"]\nОкончание в 49 дней.");
         }
         void reply(String nick,String reason,boolean forever) {
             String raw="[19:12:15] Цель ["+nick+"] "+(mode.equals("ban")?"забанена":"заткнута")+":\nЗабанил: SpidiBoost\nПричина: "+reason

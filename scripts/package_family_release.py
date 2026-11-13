@@ -25,7 +25,7 @@ sha=hashlib.sha256(jar.read_bytes()).hexdigest()
 (root/'build/libs'/spec['manifest']).write_text(f'version={version}\nminecraft=1.21.4\nartifact={jar.name}\nsha256={sha}\n',encoding='utf-8')
 source=root/'build/libs'/f'{spec["name"]}-1.21.4-{version}-source-project.zip'
 with zipfile.ZipFile(source,'w',zipfile.ZIP_DEFLATED) as z:
- for name in ('src','scripts','.github','gradle','verification','upstream','build.gradle','shared-updater.gradle','settings.gradle','gradle.properties','gradlew','gradlew.bat','README.md','AGENTS.md','.gitignore','docs','release.json'):
+ for name in ('src','scripts','.github','gradle','verification','upstream','build.gradle','shared-updater.gradle','settings.gradle','gradle.properties','gradlew','gradlew.bat','README.md','CHANGELOG.md','AGENTS.md','.gitignore','docs','release.json'):
   p=root/name
   files=sorted(p.rglob('*')) if p.is_dir() else [p]
   for f in files:

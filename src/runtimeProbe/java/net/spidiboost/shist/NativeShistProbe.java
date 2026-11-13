@@ -86,6 +86,24 @@ public final class NativeShistProbe implements ClientModInitializer {
             Text parent=Text.empty().formatted(Formatting.AQUA).append(Text.literal("Причина: Лив\nс проверки"));
             require(ReasonColors.hasAqua(StyledMessages.formatted(parent).split("\n")[0],false),"inherited parent RGB lost");
             evidence.add("PASS aqua reason only; timestamps/label ignored; inherited and newline Text colors retained");
+            for(String mode:List.of("ban","mute")){
+                var test=new Fixture();test.engine.start("QAStaff",mode,5);
+                test.engine.accept("История персонала QAStaff (Лимит: 5):");
+                for(int i=0;i<5;i++){
+                    String type=(mode.equals("ban")!=(i==3))?"забанен":"заткнут";
+                    Text reason=Text.literal(i==1?"FP_RW":"Читы").formatted(i==2?Formatting.AQUA:Formatting.GOLD);
+                    Text record=Text.empty().append(Text.literal("QA"+i+" был "+type+" куратором QAStaff\nПо причине: ").formatted(Formatting.AQUA))
+                            .append(reason).append(Text.literal(" [Активный]\nОкончание в 1 день").formatted(Formatting.AQUA));
+                    test.engine.accept(StyledMessages.formatted(record));
+                }
+                List<Integer> allowed=mode.equals("ban")?List.of(0,4):List.of(0,1,2,4);
+                test.advance(1600);
+                for(int index:allowed){test.reply(index,mode,Text.literal("Читы").formatted(Formatting.GOLD));test.advance(150);}
+                require(test.result!=null&&test.result.entries()==5,"prefilter lost history or did not finish");
+                require(test.result.accepted().equals(allowed.stream().map(i->"QA"+i).toList()),"native history reason filter changed eligible results");
+                require(test.sent.subList(1,test.sent.size()).equals(allowed.stream().map(i->"check"+mode+" QA"+i).toList()),"excluded or wrong-type history issued a command");
+                evidence.add("PASS native "+mode+" history: FP/AQUA prefilter, colored labels/statuses, mixed punishment types and exact outgoing commands");
+            }
             Files.writeString(report,String.join("\n",evidence)+"\n");
         }catch(Throwable error){error.printStackTrace();try{Files.writeString(report,"FAIL "+error+"\n");}catch(Exception ignored){}}
         finally{try{if(original!=null){var f=ShistSession.class.getDeclaredField("engine");f.setAccessible(true);f.set(null,original);}}catch(Exception ignored){}client.scheduleStop();}

@@ -8,12 +8,19 @@ public final class ReasonColors {
     private static final int[] COLORS={0x000000,0x0000aa,0x00aa00,0x00aaaa,0xaa0000,0xaa00aa,0xffaa00,0xaaaaaa,
             0x555555,0x5555ff,0x55ff55,0x55ffff,0xff5555,0xff55ff,0xffff55,0xffffff};
     private static final Pattern REASON=Pattern.compile("^(?:по причине|причина|reason)\\s*:\\s*(.*)$",Pattern.CASE_INSENSITIVE|Pattern.UNICODE_CASE);
+    private static final Pattern HISTORY_STATUS=Pattern.compile("\\[\\s*(?:активный|ист[её]к|снят|неактивный)\\s*]\\s*$",Pattern.CASE_INSENSITIVE|Pattern.UNICODE_CASE);
     private ReasonColors() { }
     public static boolean aqua(int rgb) {
         int r=(rgb>>16)&255,g=(rgb>>8)&255,b=rgb&255;
         return g>=140&&b>=180&&g-r>=35&&b-r>=50;
     }
     public static boolean hasAqua(String raw,boolean continuation) {
+        return hasAqua(raw,continuation,false);
+    }
+    static boolean hasAquaHistoryReason(String raw) {
+        return hasAqua(raw,false,true);
+    }
+    private static boolean hasAqua(String raw,boolean continuation,boolean history) {
         StringBuilder plain=new StringBuilder();BitSet blue=new BitSet();int color=-1;
         for(int i=0;i<raw.length();i++) {
             char c=raw.charAt(i);
@@ -37,7 +44,9 @@ public final class ReasonColors {
         String visible=plain.toString(),line=ShistEngine.clean(visible);if(line.isEmpty())return false;
         int start=visible.indexOf(line),end=start+line.length();
         if(start<0)return false;
-        if(!continuation){var match=REASON.matcher(line);if(!match.matches())return false;start+=match.start(1);end=visible.indexOf(line)+match.end(1);}
+        int base=start;
+        if(!continuation){var match=REASON.matcher(line);if(!match.matches())return false;start+=match.start(1);end=base+match.end(1);}
+        if(history){var status=HISTORY_STATUS.matcher(line);if(status.find())end=Math.min(end,base+status.start());}
         int colored=blue.nextSetBit(Math.max(0,start));return colored>=0&&colored<end;
     }
 }

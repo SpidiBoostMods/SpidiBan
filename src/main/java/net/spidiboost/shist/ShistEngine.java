@@ -99,11 +99,11 @@ public final class ShistEngine {
         for (String part : raw.split("\\R", -1)) {
             String line = clean(part);
             if (line.isEmpty()) continue;
-            if (phase == Phase.HISTORY) acceptHistory(line);
+            if (phase == Phase.HISTORY) acceptHistory(line, part);
             else if (phase == Phase.CHECKS) acceptCheck(line,part);
         }
     }
-    private void acceptHistory(String line) {
+    private void acceptHistory(String line, String styled) {
         Matcher header = HEADER.matcher(line);
         if (header.find()) {
             if (!header.group(1).equalsIgnoreCase(owner)) return;
@@ -138,9 +138,17 @@ public final class ShistEngine {
             entry.lines.add(line); recordHistory(line); return;
         }
         Matcher status = STATUS.matcher(line);
-        if (entry != null && (REASON.matcher(line).matches() || status.find()
+        Matcher reason = REASON.matcher(line);
+        boolean reasonLine = reason.matches();
+        if (entry != null && (reasonLine || status.find()
                 || lower.startsWith("окончание"))) {
             entry.lines.add(line);
+            if (reasonLine && mode.equals("ban")) {
+                String value = reason.group(1);
+                Matcher suffix = STATUS.matcher(value);
+                if (suffix.find()) value = value.substring(0, suffix.start()).strip();
+                entry.excludedReason |= excludedReason(value) || ReasonColors.hasAquaHistoryReason(styled);
+            }
             Matcher marker = STATUS.matcher(line);
             if (marker.find()) {
                 boolean active = marker.group(1).equalsIgnoreCase("активный");
@@ -162,11 +170,12 @@ public final class ShistEngine {
         if (records.add(signature)) {
             entries++;
             if (entry.matchesMode && (!entry.statusSeen || entry.ambiguous)) unclearHistory.add(entry.name);
-            if (entry.matchesMode && entry.active && !entry.ambiguous) {
+            if (entry.matchesMode && entry.active && !entry.ambiguous && !entry.excludedReason) {
                 checks.computeIfAbsent(key(entry.name), ignored -> new Check(entry.name));
             }
             sink.log("HISTORY ENTRY nick=" + entry.name + " active=" + entry.active
-                    + " statusSeen=" + entry.statusSeen + " entries=" + entries + " candidates=" + checks.size());
+                    + " statusSeen=" + entry.statusSeen + " excludedReason=" + entry.excludedReason
+                    + " entries=" + entries + " candidates=" + checks.size());
             historyCompleted();
         } else sink.log("HISTORY DUPLICATE nick=" + entry.name);
         entry = null;
@@ -404,7 +413,7 @@ public final class ShistEngine {
     }
     private static final class HistoryEntry {
         final String name, date; final boolean matchesMode;
-        boolean active, statusSeen, ambiguous; final List<String> lines = new ArrayList<>();
+        boolean active, statusSeen, ambiguous, excludedReason; final List<String> lines = new ArrayList<>();
         HistoryEntry(String name, String date, boolean matchesMode) { this.name=name; this.date=date; this.matchesMode=matchesMode; }
     }
     private static final class Check {
