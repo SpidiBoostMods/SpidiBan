@@ -56,7 +56,7 @@ final class FastAccept {
                 }
                 return;
             }
-            case MISSING -> { if (step != Step.ROOT) return; }
+            case MISSING -> { }
             case COOLDOWN -> { if (step != Step.RESULT && step != Step.ROOT) return; }
             case ALREADY_BANNED -> { }
         }

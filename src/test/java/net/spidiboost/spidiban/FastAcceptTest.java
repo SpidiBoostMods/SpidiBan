@@ -112,4 +112,16 @@ class FastAcceptTest {
         for(String text:List.of("Alex » Подождите 5 секунд","Подождите 5 секунд до телепортации","Администратор banana250 замутил EFE17 на 4 часов по причине 'подождите 5 секунд'"))
             assertNull(BanEvidence.parse(text));
     }
+
+    @Test void missingPlayerSkipsCurrentNickInBothModes() {
+        for (boolean early : List.of(true, false)) {
+            var r = new Rig(early);
+            r.tick();
+            r.prepare();
+            r.reply("Player does not exist.");
+            r.tick();
+            assertEquals("banrw Second", r.commands.getLast());
+            assertEquals(2, r.commands.size());
+        }
+    }
 }
